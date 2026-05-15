@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -84,8 +85,13 @@ type Config struct {
 // variables cause a fatal log (process exits non-zero) rather than running
 // half-configured.
 func Load() (Config, error) {
+	nodeToken, err := loadNodeToken()
+	if err != nil {
+		return Config{}, err
+	}
+
 	cfg := Config{
-		NodeToken:        strings.TrimSpace(os.Getenv("GDRIVE_NODE_TOKEN")),
+		NodeToken:        nodeToken,
 		LocalTLSDomain:   strings.TrimSpace(os.Getenv("LOCAL_TLS_DOMAIN")),
 		ControlCenterURL: strings.TrimRight(strings.TrimSpace(os.Getenv("CONTROL_CENTER_URL")), "/"),
 		TraefikDockerDNS: strings.TrimSpace(os.Getenv("TRAEFIK_DOCKER_DNS")),
@@ -171,6 +177,22 @@ func getFloat(k string, def float64) float64 {
 		}
 	}
 	return def
+}
+
+// loadNodeToken reads the bearer token from BEARER_TOKEN_FILE if set,
+// otherwise from GDRIVE_NODE_TOKEN env. The file path is the production
+// shape (mode 0600 bind-mount provisioned by the ansible role); env-var
+// fallback exists for local dev/test and to mirror duplicacy-agent-api's
+// dual-source pattern.
+func loadNodeToken() (string, error) {
+	if path := strings.TrimSpace(os.Getenv("BEARER_TOKEN_FILE")); path != "" {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return "", fmt.Errorf("read BEARER_TOKEN_FILE=%s: %w", path, err)
+		}
+		return strings.TrimSpace(string(raw)), nil
+	}
+	return strings.TrimSpace(os.Getenv("GDRIVE_NODE_TOKEN")), nil
 }
 
 func getInt(k string, def int) int {
