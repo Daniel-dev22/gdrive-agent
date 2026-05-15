@@ -32,11 +32,19 @@ type App struct {
 	Runner  *job.Runner
 	Fleet   *fleet.Hub
 
-	// SecretsFetcher returns the per-account credentials bundle. In
-	// production this calls the router's /api/gdrive/accounts/:id/
-	// secrets-for-node/:node endpoint over the mTLS tunnel; for tests it
-	// can return a static bundle.
+	// SecretsFetcher returns the per-account credentials bundle for JOB
+	// execution. In production this calls the router's
+	// /api/gdrive/accounts/:id/secrets-for-node/:node endpoint over the mTLS
+	// tunnel; the router checks for an existing repo binding before vending.
+	// For tests it can return a static bundle.
 	SecretsFetcher func(ctx context.Context, accountID string) (drive.SecretBundle, error)
+
+	// BrowseSecretsFetcher returns the per-account credentials bundle for
+	// the FOLDER PICKER, which needs Drive credentials before any repo row
+	// exists (first-repo bootstrap). Calls
+	// /api/gdrive/accounts/:id/secrets-for-browse/:node — same bearer auth,
+	// same bundle shape, no repo-binding requirement.
+	BrowseSecretsFetcher func(ctx context.Context, accountID string) (drive.SecretBundle, error)
 
 	// RouterClient is the HTTP client used for outbound calls back to the
 	// controller router. Pooled, HTTP/2 enabled, no per-request alloc.
@@ -490,7 +498,7 @@ func (a *App) handleListFolders(c *gin.Context) {
 	q := c.Query("q")
 	parent := c.Query("parent")
 
-	bundle, err := a.SecretsFetcher(c.Request.Context(), accountID)
+	bundle, err := a.BrowseSecretsFetcher(c.Request.Context(), accountID)
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "fetch secrets: " + err.Error()})
 		return
@@ -562,12 +570,26 @@ func (a *App) EventEmitter() job.EventEmitter {
 	}
 }
 
-// DefaultSecretsFetcher returns a SecretsFetcher that pulls the per-account
-// bundle from the router. Hidden behind the App field so tests can swap it.
+// DefaultSecretsFetcher returns a SecretsFetcher for the job-run path
+// (router enforces a repo binding before vending).
 func DefaultSecretsFetcher(cfg config.Config, client *http.Client) func(ctx context.Context, accountID string) (drive.SecretBundle, error) {
+	return secretsFetcher(cfg, client, "secrets-for-node")
+}
+
+// DefaultBrowseSecretsFetcher returns a SecretsFetcher for the folder-picker
+// path (account-existence check only — no repo binding required so a new
+// account with zero repos can still browse Drive when creating its first repo).
+func DefaultBrowseSecretsFetcher(cfg config.Config, client *http.Client) func(ctx context.Context, accountID string) (drive.SecretBundle, error) {
+	return secretsFetcher(cfg, client, "secrets-for-browse")
+}
+
+// secretsFetcher is the shared implementation behind DefaultSecretsFetcher
+// and DefaultBrowseSecretsFetcher. The two paths return identical bundles —
+// only the router-side authorization predicate differs.
+func secretsFetcher(cfg config.Config, client *http.Client, pathSegment string) func(ctx context.Context, accountID string) (drive.SecretBundle, error) {
 	return func(ctx context.Context, accountID string) (drive.SecretBundle, error) {
-		u := fmt.Sprintf("%s/api/gdrive/accounts/%s/secrets-for-node/%s",
-			cfg.ControlCenterURL, url.PathEscape(accountID), url.PathEscape(cfg.NodeName))
+		u := fmt.Sprintf("%s/api/gdrive/accounts/%s/%s/%s",
+			cfg.ControlCenterURL, url.PathEscape(accountID), pathSegment, url.PathEscape(cfg.NodeName))
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 		if err != nil {
 			return drive.SecretBundle{}, err

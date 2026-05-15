@@ -86,6 +86,7 @@ func main() {
 		RouterClient: routerHTTP,
 	}
 	app.SecretsFetcher = router.DefaultSecretsFetcher(cfg, routerHTTP)
+	app.BrowseSecretsFetcher = router.DefaultBrowseSecretsFetcher(cfg, routerHTTP)
 
 	// Two-phase construction: the runner's OnChange callback wants to
 	// point at hub.Trigger, but the hub's Builder wants to point at the
