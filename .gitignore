@@ -1,0 +1,20 @@
+# Build output
+/gdrive-agent
+/dist/
+/build/
+
+# Local env
+.env
+.env.local
+
+# Go test/build caches
+*.test
+*.out
+
+# In-progress files (atomic write artifacts)
+*.part
+
+# IDE
+.idea/
+.vscode/
+*.swp

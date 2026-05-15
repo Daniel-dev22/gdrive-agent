@@ -1,0 +1,83 @@
+package ws
+
+import (
+	"net/http"
+	"sync"
+	"time"
+
+	"github.com/gin-gonic/gin"
+	"github.com/gorilla/websocket"
+	"github.com/rs/zerolog/log"
+
+	"github.com/Daniel-dev22/gdrive-agent/internal/fleet"
+)
+
+// upgrader is shared across both /ws/* handlers. CheckOrigin returns true
+// because authentication has already happened at the bearer-auth middleware
+// — origin spoofing isn't a meaningful additional surface.
+var upgrader = websocket.Upgrader{
+	ReadBufferSize:  4096,
+	WriteBufferSize: 4096,
+	CheckOrigin:     func(r *http.Request) bool { return true },
+}
+
+// FleetHandler returns a gin handler that upgrades to WS and streams
+// snapshot frames from the hub. One read pump (detect disconnect) and
+// one write pump (snapshots + 30s heartbeat) per connection.
+func FleetHandler(hub *fleet.Hub) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
+		if err != nil {
+			log.Warn().Err(err).Msg("fleet ws upgrade")
+			return
+		}
+		ch, unsub := hub.Subscribe()
+		defer unsub()
+
+		// Initial snapshot — don't make the client wait for the next tick.
+		if snap, err := hub.SnapshotNow(c.Request.Context()); err == nil {
+			_ = conn.WriteJSON(snap)
+		}
+
+		writeMu := sync.Mutex{}
+		done := make(chan struct{})
+
+		// Heartbeat / writer pump.
+		go func() {
+			t := time.NewTicker(30 * time.Second)
+			defer t.Stop()
+			defer conn.Close()
+			for {
+				select {
+				case <-done:
+					return
+				case snap, ok := <-ch:
+					if !ok {
+						return
+					}
+					writeMu.Lock()
+					err := conn.WriteJSON(snap)
+					writeMu.Unlock()
+					if err != nil {
+						return
+					}
+				case <-t.C:
+					writeMu.Lock()
+					err := conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(10*time.Second))
+					writeMu.Unlock()
+					if err != nil {
+						return
+					}
+				}
+			}
+		}()
+
+		// Read pump (blocks until disconnect).
+		defer close(done)
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
+		}
+	}
+}
