@@ -46,9 +46,13 @@ type App struct {
 // RegisterRoutes mounts every endpoint listed in plan §F.2. Wraps mutating
 // routes with the bearer middleware passed in from main.
 func (a *App) RegisterRoutes(r *gin.Engine, bearer gin.HandlerFunc) {
-	// Health endpoints — no auth.
+	// Health endpoints — no auth. HEAD aliases registered because container
+	// healthcheck tools (`wget --spider`, `curl -I`) issue HEAD; gin doesn't
+	// auto-route HEAD to GET handlers.
 	r.GET("/health/live", a.handleLive)
+	r.HEAD("/health/live", a.handleLive)
 	r.GET("/health/ready", a.handleReady)
+	r.HEAD("/health/ready", a.handleReady)
 
 	auth := r.Group("/")
 	auth.Use(bearer)
