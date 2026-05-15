@@ -28,14 +28,14 @@ RUN CGO_ENABLED=0 GOOS=linux \
       -o /out/gdrive-agent \
       ./cmd/gdrive-agent
 
-# Distroless static is the smallest base that still ships ca-certificates
-# (needed for HTTPS to googleapis.com). Runs as root — matches
-# duplicacy-agent-api so the same root-owned mode-0600 bearer-token
-# file mount works (nonroot UID couldn't read it without chmod'ing world-
-# readable on the host, which leaks the plaintext to any local user).
-# Single-tenant agent on a docker-compose host — root inside the container
-# only sees the bind-mounted backup tree + bearer file + state dir.
-FROM gcr.io/distroless/base-debian12
+# alpine matches duplicacy-agent-api: adds ca-certificates (HTTPS to
+# googleapis.com) + wget for the docker-compose healthcheck. Runs as root
+# so the bind-mounted mode-0600 root-owned bearer-token file is readable
+# without chmod'ing it world-readable on the host.
+FROM alpine:3.19
+RUN apk add --no-cache ca-certificates wget
 COPY --from=build /out/gdrive-agent /gdrive-agent
 EXPOSE 8080
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+  CMD wget -q --spider http://localhost:8080/health/ready || exit 1
 ENTRYPOINT ["/gdrive-agent"]
