@@ -536,7 +536,7 @@ func (a *App) EventEmitter() job.EventEmitter {
 			"emitted_at": time.Now().UTC().Format(time.RFC3339Nano),
 			"payload":   payload,
 		})
-		u := fmt.Sprintf("%s/api/gdrive/jobs/%s/event", a.Cfg.RouterBaseURL, url.PathEscape(jobID))
+		u := fmt.Sprintf("%s/api/gdrive/jobs/%s/event", a.Cfg.ControlCenterURL, url.PathEscape(jobID))
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, strings.NewReader(string(body)))
 		if err != nil {
 			log.Warn().Err(err).Msg("event emitter: build req")
@@ -562,7 +562,7 @@ func (a *App) EventEmitter() job.EventEmitter {
 func DefaultSecretsFetcher(cfg config.Config, client *http.Client) func(ctx context.Context, accountID string) (drive.SecretBundle, error) {
 	return func(ctx context.Context, accountID string) (drive.SecretBundle, error) {
 		u := fmt.Sprintf("%s/api/gdrive/accounts/%s/secrets-for-node/%s",
-			cfg.RouterBaseURL, url.PathEscape(accountID), url.PathEscape(cfg.NodeName))
+			cfg.ControlCenterURL, url.PathEscape(accountID), url.PathEscape(cfg.NodeName))
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 		if err != nil {
 			return drive.SecretBundle{}, err

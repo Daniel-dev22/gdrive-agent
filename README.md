@@ -42,7 +42,8 @@ unauthenticated.
 ```bash
 GDRIVE_NODE_TOKEN=…  \
 LOCAL_TLS_DOMAIN=example.com  \
-ROUTER_BASE_URL=https://controller.example.com  \
+CONTROL_CENTER_URL=https://controller-api.example.com:1443  \
+TRAEFIK_DOCKER_DNS=traefik  \
 SITE_ID=kd  \
 NODE_NAME=nas  \
 GDRIVE_BACKUP_ROOT=/mnt/backups/gdrive  \
@@ -59,7 +60,8 @@ The deployment role mirrors the existing duplicacy-agent-api role one-to-one:
 |---|---|
 | Bearer token | `GDRIVE_NODE_TOKEN` env, sourced from Bitwarden `gdrive-node-tokens` per-host field |
 | Backup volume | host bind-mount at `${GDRIVE_BACKUP_ROOT}` (default `/mnt/backups/gdrive`), writable by the container's nonroot user |
-| Router URL | `ROUTER_BASE_URL=https://controller.<domain>` — must reach the local Traefik that exposes the cluster Service |
+| Controller URL | `CONTROL_CENTER_URL=https://controller-api.<domain>:1443` — the public cross-site hostname. Stays as Host header / TLS SNI on every outbound call so the local Traefik can match `Host(controller-api.<domain>)` |
+| Traefik DNS rewrite | `TRAEFIK_DOCKER_DNS=traefik` (and optional `TRAEFIK_DIAL_PORT=1443`) — when set, the agent's DialContext routes every outbound TCP to the named docker container instead of resolving the public hostname. Matches duplicacy-agent-api's pattern; required on NAS hosts so the agent never has to depend on the host's DNS for `controller-api.<domain>` |
 | Site id | `SITE_ID=kd` on `kd-nas01`, `SITE_ID=ng` on `ng-nas01` |
 | Node name | `NODE_NAME=nas` (matches the `:node` segment in the router's `/api/gdrive/:node/*` route) |
 

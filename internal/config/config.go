@@ -24,9 +24,27 @@ type Config struct {
 	// header that local Traefik expects to see. e.g. "example.com".
 	LocalTLSDomain string
 
-	// RouterBaseURL is the absolute URL the agent posts job events and pulls
-	// secret bundles from. e.g. "https://controller.example.com".
-	RouterBaseURL string
+	// ControlCenterURL is the absolute URL the agent posts job events and
+	// pulls secret bundles from. Always the public cross-site hostname so the
+	// local Traefik can match Host(`controller-api.{domain}`) and forward
+	// into the cluster — e.g. "https://controller-api.example.com:1443".
+	// Mirrors duplicacy-agent-api's CONTROL_CENTER_URL.
+	ControlCenterURL string
+
+	// TraefikDockerDNS is the docker-network DNS name to dial INSTEAD of the
+	// hostname in ControlCenterURL. When set (typically "traefik"), the HTTP
+	// client rewrites every dial target to <TraefikDockerDNS>:<TraefikDialPort>
+	// while keeping the URL's authority as the Host header / TLS SNI. This
+	// lets the local docker Traefik match `controller-api.{domain}` and
+	// forward into the cluster over its site-specific mTLS ServersTransport.
+	// Empty disables rewrite (direct dial; for k3s-node hosts that reach the
+	// cluster via CNI cluster DNS — not applicable to gdrive which is NAS-only
+	// but kept for parity with duplicacy-agent-api).
+	TraefikDockerDNS string
+
+	// TraefikDialPort is the port on the resolved Traefik IP. Default "1443"
+	// — the websecure-internal entrypoint.
+	TraefikDialPort string
 
 	// BackupRoot is the on-disk root for every backed-up account's mirror.
 	// Default /mnt/backups/gdrive. The host bind-mount provided by the
@@ -67,16 +85,18 @@ type Config struct {
 // half-configured.
 func Load() (Config, error) {
 	cfg := Config{
-		NodeToken:      strings.TrimSpace(os.Getenv("GDRIVE_NODE_TOKEN")),
-		LocalTLSDomain: strings.TrimSpace(os.Getenv("LOCAL_TLS_DOMAIN")),
-		RouterBaseURL:  strings.TrimRight(strings.TrimSpace(os.Getenv("ROUTER_BASE_URL")), "/"),
-		BackupRoot:     getEnv("GDRIVE_BACKUP_ROOT", "/mnt/backups/gdrive"),
-		SiteID:         strings.TrimSpace(os.Getenv("SITE_ID")),
-		NodeName:       strings.TrimSpace(os.Getenv("NODE_NAME")),
-		MaxRPS:         getFloat("GDRIVE_MAX_RPS", 10),
-		MaxConcurrent:  getInt("GDRIVE_MAX_CONCURRENT", 8),
-		ListenAddr:     getEnv("LISTEN_ADDR", ":8080"),
-		LogLevel:       getEnv("LOG_LEVEL", "info"),
+		NodeToken:        strings.TrimSpace(os.Getenv("GDRIVE_NODE_TOKEN")),
+		LocalTLSDomain:   strings.TrimSpace(os.Getenv("LOCAL_TLS_DOMAIN")),
+		ControlCenterURL: strings.TrimRight(strings.TrimSpace(os.Getenv("CONTROL_CENTER_URL")), "/"),
+		TraefikDockerDNS: strings.TrimSpace(os.Getenv("TRAEFIK_DOCKER_DNS")),
+		TraefikDialPort:  getEnv("TRAEFIK_DIAL_PORT", "1443"),
+		BackupRoot:       getEnv("GDRIVE_BACKUP_ROOT", "/mnt/backups/gdrive"),
+		SiteID:           strings.TrimSpace(os.Getenv("SITE_ID")),
+		NodeName:         strings.TrimSpace(os.Getenv("NODE_NAME")),
+		MaxRPS:           getFloat("GDRIVE_MAX_RPS", 10),
+		MaxConcurrent:    getInt("GDRIVE_MAX_CONCURRENT", 8),
+		ListenAddr:       getEnv("LISTEN_ADDR", ":8080"),
+		LogLevel:         getEnv("LOG_LEVEL", "info"),
 	}
 
 	// Restore allowlist defaults to the backup root if unset. This means a
@@ -116,8 +136,8 @@ func (c Config) validate() error {
 	if c.LocalTLSDomain == "" {
 		missing = append(missing, "LOCAL_TLS_DOMAIN")
 	}
-	if c.RouterBaseURL == "" {
-		missing = append(missing, "ROUTER_BASE_URL")
+	if c.ControlCenterURL == "" {
+		missing = append(missing, "CONTROL_CENTER_URL")
 	}
 	if c.SiteID == "" {
 		missing = append(missing, "SITE_ID")

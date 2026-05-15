@@ -72,10 +72,13 @@ func main() {
 	limiter := drive.NewAdaptiveLimiter(cfg.MaxRPS, cfg.MaxConcurrent)
 	limiter.StartRamper(ctx)
 
-	// Pooled HTTP client for outbound calls back to the router. Plain HTTPS
-	// — the NAS's local Traefik handles cert pinning at the host edge, the
-	// agent doesn't need to know.
-	routerHTTP := newRouterClient()
+	// Pooled HTTP client for outbound calls back to the router. The URL host
+	// ("controller-api.{domain}") is preserved as the Host header so the
+	// local docker Traefik can match its routing rule; when TRAEFIK_DOCKER_DNS
+	// is set the dial target is rewritten to that container so we never have
+	// to depend on the host's DNS resolving the public hostname correctly.
+	// Mirrors duplicacy-agent-api/network.go:buildControlCenterClient.
+	routerHTTP := newRouterClient(cfg)
 
 	app := &router.App{
 		Cfg:          cfg,
@@ -158,22 +161,45 @@ func main() {
 }
 
 // newRouterClient builds the pooled HTTP client used for /api/* calls back
-// to the controller router. Standard internal-service preset: short
-// dial, long keepalive, no global timeout (long-running secrets-vend calls
-// must not be clipped).
-func newRouterClient() *http.Client {
+// to the controller router. Two operating modes — same shape as
+// duplicacy-agent-api/network.go:buildControlCenterClient:
+//
+//   - **Direct mode** (cfg.TraefikDockerDNS == ""): the URL host is dialed
+//     normally. Used when the agent can resolve the public hostname itself
+//     (e.g. tests, k3s-node hosts dialing cluster DNS).
+//
+//   - **Traefik-rewrite mode** (cfg.TraefikDockerDNS != ""): DialContext
+//     ignores the URL's host:port and dials <TraefikDockerDNS>:<TraefikDialPort>
+//     instead — the local docker Traefik container, resolved via the docker
+//     network's embedded DNS. The HTTP Host header and TLS SNI stay as the
+//     URL host (e.g. "controller-api.example.com:1443") so Traefik
+//     matches the inbound rule and forwards into the cluster over its
+//     site-specific mTLS ServersTransport.
+func newRouterClient(cfg config.Config) *http.Client {
+	dialer := &net.Dialer{
+		Timeout:   5 * time.Second,
+		KeepAlive: 30 * time.Second,
+	}
+
+	transport := &http.Transport{
+		ForceAttemptHTTP2:   true,
+		MaxIdleConns:        20,
+		MaxIdleConnsPerHost: 10,
+		IdleConnTimeout:     90 * time.Second,
+	}
+
+	if cfg.TraefikDockerDNS != "" {
+		traefikTarget := net.JoinHostPort(cfg.TraefikDockerDNS, cfg.TraefikDialPort)
+		transport.DialContext = func(ctx context.Context, network, _ string) (net.Conn, error) {
+			return dialer.DialContext(ctx, network, traefikTarget)
+		}
+	} else {
+		transport.DialContext = dialer.DialContext
+	}
+
 	return &http.Client{
-		Timeout: 30 * time.Second,
-		Transport: &http.Transport{
-			ForceAttemptHTTP2:   true,
-			MaxIdleConns:        20,
-			MaxIdleConnsPerHost: 10,
-			IdleConnTimeout:     90 * time.Second,
-			DialContext: (&net.Dialer{
-				Timeout:   5 * time.Second,
-				KeepAlive: 30 * time.Second,
-			}).DialContext,
-		},
+		Timeout:   30 * time.Second,
+		Transport: transport,
 	}
 }
 
@@ -214,7 +240,9 @@ Usage: gdrive-agent [--help|--version]
 Required env vars:
   GDRIVE_NODE_TOKEN              Bearer token presented by controller router
   LOCAL_TLS_DOMAIN               e.g. example.com
-  ROUTER_BASE_URL                e.g. https://controller.example.com
+  CONTROL_CENTER_URL             e.g. https://controller-api.example.com:1443
+  TRAEFIK_DOCKER_DNS             e.g. traefik (rewrite dial target to local docker Traefik; mirrors duplicacy)
+  TRAEFIK_DIAL_PORT              default 1443
   SITE_ID                        kd | ng
   NODE_NAME                      e.g. nas
 
