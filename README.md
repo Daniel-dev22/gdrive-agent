@@ -58,7 +58,7 @@ The deployment role mirrors the existing duplicacy-agent-api role one-to-one:
 
 | Concern | What the role must provide |
 |---|---|
-| Bearer token | `GDRIVE_NODE_TOKEN` env, sourced from Bitwarden `gdrive-node-tokens` per-host field |
+| Bearer token | `GDRIVE_NODE_TOKEN` env, generated random at role-deploy time. The role SHA-256s the plaintext and SQL-upserts `(node, token_hash)` into `gdrive_node_tokens` via `kubectl exec` into the site's CNPG primary — same pattern as duplicacy-agent-api's `upsert-node-token.yml`. No Bitwarden item involved. |
 | Backup volume | host bind-mount at `${GDRIVE_BACKUP_ROOT}` (default `/mnt/backups/gdrive`), writable by the container's nonroot user |
 | Controller URL | `CONTROL_CENTER_URL=https://controller-api.<domain>:1443` — the public cross-site hostname. Stays as Host header / TLS SNI on every outbound call so the local Traefik can match `Host(controller-api.<domain>)` |
 | Traefik DNS rewrite | `TRAEFIK_DOCKER_DNS=traefik` (and optional `TRAEFIK_DIAL_PORT=1443`) — when set, the agent's DialContext routes every outbound TCP to the named docker container instead of resolving the public hostname. Matches duplicacy-agent-api's pattern; required on NAS hosts so the agent never has to depend on the host's DNS for `controller-api.<domain>` |
