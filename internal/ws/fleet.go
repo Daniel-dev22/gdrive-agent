@@ -13,8 +13,8 @@ import (
 )
 
 // upgrader is shared across both /ws/* handlers. CheckOrigin returns true
-// because authentication has already happened at the bearer-auth middleware
-// — origin spoofing isn't a meaningful additional surface.
+// because inbound auth terminates at the mTLS tunnel before requests reach
+// the agent — origin spoofing isn't a meaningful additional surface.
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  4096,
 	WriteBufferSize: 4096,

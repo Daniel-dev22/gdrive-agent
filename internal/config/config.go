@@ -15,10 +15,11 @@ import (
 // ansible role that deploys the agent renders these into the docker-compose
 // env block.
 type Config struct {
-	// NodeToken is the plaintext bearer presented by the router on every
-	// authenticated HTTP call. The router stores the SHA-256 of this in the
-	// gdrive_node_tokens table; the agent compares the incoming header to
-	// this plaintext via crypto/subtle.ConstantTimeCompare.
+	// NodeToken is the plaintext bearer the agent attaches to its outbound
+	// calls to the controller router. The router stores the SHA-256 of
+	// this in the gdrive_node_tokens table and verifies inbound agent calls
+	// against it. Mirrors duplicacy-agent-api: inbound auth on the agent is
+	// the mTLS tunnel, so this token is used only in the agent→router direction.
 	NodeToken string
 
 	// LocalTLSDomain feeds the agent's redirect-URI computation and the host

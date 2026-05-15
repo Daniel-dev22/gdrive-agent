@@ -43,9 +43,11 @@ type App struct {
 	RouterClient *http.Client
 }
 
-// RegisterRoutes mounts every endpoint listed in plan §F.2. Wraps mutating
-// routes with the bearer middleware passed in from main.
-func (a *App) RegisterRoutes(r *gin.Engine, bearer gin.HandlerFunc) {
+// RegisterRoutes mounts every endpoint listed in plan §F.2. Inbound auth
+// terminates at the mTLS tunnel (per-site client cert verified by the host
+// Traefik); application-layer bearer auth is reserved for the reverse
+// direction (agent → controller calls in handleSecrets / outbound code).
+func (a *App) RegisterRoutes(r *gin.Engine) {
 	// Health endpoints — no auth. HEAD aliases registered because container
 	// healthcheck tools (`wget --spider`, `curl -I`) issue HEAD; gin doesn't
 	// auto-route HEAD to GET handlers.
@@ -55,7 +57,6 @@ func (a *App) RegisterRoutes(r *gin.Engine, bearer gin.HandlerFunc) {
 	r.HEAD("/health/ready", a.handleReady)
 
 	auth := r.Group("/")
-	auth.Use(bearer)
 
 	// Repo lifecycle.
 	auth.POST("/repos/init", a.handleReposInit)

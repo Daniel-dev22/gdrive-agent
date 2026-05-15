@@ -17,7 +17,6 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
-	"github.com/Daniel-dev22/gdrive-agent/internal/auth"
 	"github.com/Daniel-dev22/gdrive-agent/internal/config"
 	"github.com/Daniel-dev22/gdrive-agent/internal/db"
 	"github.com/Daniel-dev22/gdrive-agent/internal/drive"
@@ -123,14 +122,13 @@ func main() {
 	r.Use(gin.Recovery())
 	r.Use(loggerMiddleware())
 
-	bearer := auth.RequireBearer(cfg.NodeToken)
-	app.RegisterRoutes(r, bearer)
+	app.RegisterRoutes(r)
 
-	// WS endpoints — both require bearer auth via Sec-WebSocket-Protocol or
-	// query string is NOT used; the standard Authorization header is sent
-	// by the router-side proxy, so the normal bearer middleware works.
-	r.GET("/ws/fleet", bearer, ws.FleetHandler(hub))
-	r.GET("/ws/jobs/:id/logs", bearer, ws.JobLogHandler(runner))
+	// WS endpoints. Inbound auth is the mTLS tunnel terminated by the host
+	// Traefik (per-site client cert); no application-layer bearer is required
+	// on this direction.
+	r.GET("/ws/fleet", ws.FleetHandler(hub))
+	r.GET("/ws/jobs/:id/logs", ws.JobLogHandler(runner))
 
 	srv := &http.Server{
 		Addr:              cfg.ListenAddr,
@@ -238,7 +236,7 @@ func printHelp() {
 Usage: gdrive-agent [--help|--version]
 
 Required env vars:
-  GDRIVE_NODE_TOKEN              Bearer token presented by controller router
+  GDRIVE_NODE_TOKEN              Bearer token the agent attaches on outbound calls to controller
   LOCAL_TLS_DOMAIN               e.g. example.com
   CONTROL_CENTER_URL             e.g. https://controller-api.example.com:1443
   TRAEFIK_DOCKER_DNS             e.g. traefik (rewrite dial target to local docker Traefik; mirrors duplicacy)
