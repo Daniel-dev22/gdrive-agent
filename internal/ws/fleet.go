@@ -21,6 +21,16 @@ var upgrader = websocket.Upgrader{
 	CheckOrigin:     func(r *http.Request) bool { return true },
 }
 
+// snapshotEnvelope is the wire shape the frontend's useFleet hook expects:
+// {"type":"snapshot","data":<snap>}. Mirrors duplicacy-agent-api's
+// fleetEvent — same hook consumes both backends, so the wrapper has to match
+// or the frontend silently drops the frame (which manifests as the panel
+// showing "unreachable" even though the WS is connected).
+type snapshotEnvelope struct {
+	Type string          `json:"type"`
+	Data *fleet.Snapshot `json:"data"`
+}
+
 // FleetHandler returns a gin handler that upgrades to WS and streams
 // snapshot frames from the hub. One read pump (detect disconnect) and
 // one write pump (snapshots + 30s heartbeat) per connection.
@@ -36,7 +46,7 @@ func FleetHandler(hub *fleet.Hub) gin.HandlerFunc {
 
 		// Initial snapshot — don't make the client wait for the next tick.
 		if snap, err := hub.SnapshotNow(c.Request.Context()); err == nil {
-			_ = conn.WriteJSON(snap)
+			_ = conn.WriteJSON(snapshotEnvelope{Type: "snapshot", Data: &snap})
 		}
 
 		writeMu := sync.Mutex{}
@@ -56,7 +66,7 @@ func FleetHandler(hub *fleet.Hub) gin.HandlerFunc {
 						return
 					}
 					writeMu.Lock()
-					err := conn.WriteJSON(snap)
+					err := conn.WriteJSON(snapshotEnvelope{Type: "snapshot", Data: &snap})
 					writeMu.Unlock()
 					if err != nil {
 						return
