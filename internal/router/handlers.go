@@ -534,7 +534,10 @@ func (a *App) handleListFolders(c *gin.Context) {
 	for _, f := range resp.Files {
 		out = append(out, folderEntry{ID: f.Id, Name: f.Name})
 	}
-	c.JSON(http.StatusOK, out)
+	// Wrap in {folders: [...]} — the frontend's gdrive-api.ts client expects
+	// `r.folders` (mirrors the duplicacy picker's shape). Returning a bare
+	// array makes `.map` crash on `undefined` in RepoForm.
+	c.JSON(http.StatusOK, gin.H{"folders": out})
 }
 
 // ----- router event-emitter helper -----
