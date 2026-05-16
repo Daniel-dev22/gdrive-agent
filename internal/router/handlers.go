@@ -561,13 +561,54 @@ func (a *App) handleListFolders(c *gin.Context) {
 // EventEmitter returns a job.EventEmitter that POSTs lifecycle events to
 // the controller router at /api/gdrive/jobs/:id/event. Bearer-authed
 // with the agent's node token. Pooled HTTP/2 client.
+//
+// Wire shape: FLAT object matching the router's gdriveAgentEvent struct
+// (job_id, site, node, action, state, …). The router uses these fields
+// to UPSERT into gdrive_jobs — it rejects (HTTP 400) any envelope that
+// doesn't carry job_id at the top level, so wrapping the payload in a
+// nested {event, emitted_at, payload} envelope (the old shape) silently
+// dropped every event with no row written. The agent looks the live
+// JobHandle up via Runner.Job() to fill in the metadata the runner
+// callback's narrow signature doesn't pass through.
 func (a *App) EventEmitter() job.EventEmitter {
-	return func(ctx context.Context, jobID string, event string, payload map[string]any) {
-		body, _ := json.Marshal(map[string]any{
-			"event":     event,
+	return func(ctx context.Context, jobID string, event string, extra map[string]any) {
+		flat := map[string]any{
+			"job_id":     jobID,
+			"site":       a.Cfg.SiteID,
+			"node":       a.Cfg.NodeName,
+			"event":      event,
 			"emitted_at": time.Now().UTC().Format(time.RFC3339Nano),
-			"payload":   payload,
-		})
+		}
+		if h := a.Runner.Job(jobID); h != nil {
+			flat["repo_id"] = h.Row.RepoID
+			flat["account_id"] = h.Row.AccountID
+			flat["action"] = h.Row.Action
+			flat["state"] = h.Row.State
+			flat["started_at"] = h.Row.StartedAt
+			if h.Row.CompletedAt != nil {
+				flat["completed_at"] = *h.Row.CompletedAt
+			}
+			if h.Row.ExitCode != nil {
+				flat["exit_code"] = *h.Row.ExitCode
+			}
+			if h.Row.Error != "" {
+				flat["error"] = h.Row.Error
+			}
+			flat["schedule_id"] = h.Row.ScheduleID
+			flat["trigger_key"] = h.Row.TriggerKey
+			flat["files_seen"] = h.Row.FilesSeen
+			flat["files_changed"] = h.Row.FilesChanged
+			flat["bytes_downloaded"] = h.Row.BytesDownloaded
+			flat["api_calls"] = h.Row.APICalls
+		}
+		// Merge extras from the runner (markCompleted/markFailed pass
+		// e.g. final metrics or the error message). These override the
+		// JobRow snapshot when both are present — the runner's view is
+		// authoritative at the moment of emission.
+		for k, v := range extra {
+			flat[k] = v
+		}
+		body, _ := json.Marshal(flat)
 		u := fmt.Sprintf("%s/api/gdrive/jobs/%s/event", a.Cfg.ControlCenterURL, url.PathEscape(jobID))
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, strings.NewReader(string(body)))
 		if err != nil {
