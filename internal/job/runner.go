@@ -536,9 +536,30 @@ func (w *fileWalker) pathOf(f *drive.File) string {
 }
 
 func (r *Runner) collectFiles(ctx context.Context, svc *drive.Service, repo db.RepoRow, h *JobHandle) (*fileWalker, error) {
-	w := &fileWalker{parentMap: map[string]*drive.File{}, rootID: repo.SourceFolderID}
+	// Drive's "root" alias works in Q() / Get() but NEVER appears in a
+	// file's parents[] — Drive serializes parents as canonical folder IDs.
+	// descendsFrom() compares against parent IDs, so if we leave rootID as
+	// the literal "root" string every file gets filtered out and the
+	// backup walks zero files. Resolve to the canonical ID once up-front
+	// so the descendant filter works. One extra API call per job.
+	rootID := repo.SourceFolderID
+	if rootID == "root" {
+		release, lerr := r.limiter.Wait(ctx)
+		if lerr != nil {
+			return nil, lerr
+		}
+		rootFolder, err := svc.Files.Get("root").Fields("id").SupportsAllDrives(true).Context(ctx).Do()
+		release()
+		h.Row.APICalls++
+		if err != nil {
+			return nil, fmt.Errorf("resolve drive root alias: %w", err)
+		}
+		rootID = rootFolder.Id
+		r.logInfo(h, "resolved root alias", "canonical_id", rootID)
+	}
+	w := &fileWalker{parentMap: map[string]*drive.File{}, rootID: rootID}
 	query := "trashed=false"
-	if repo.SourceFolderID != "" {
+	if rootID != "" {
 		// Scope to the configured folder subtree. files.list doesn't filter
 		// recursively by parent — we do a BFS using parents in a single
 		// listing pass, then filter to descendants of the root.
@@ -575,14 +596,14 @@ func (r *Runner) collectFiles(ctx context.Context, svc *drive.Service, repo db.R
 		}
 		pageToken = resp.NextPageToken
 	}
-	// Materialize the in-scope file slice. If a SourceFolderID is set,
+	// Materialize the in-scope file slice. If a root folder is configured,
 	// keep only files whose parent chain hits that folder. Folders are
 	// retained in parentMap for path resolution but never downloaded.
 	for _, f := range w.parentMap {
 		if isFolder(f.MimeType) {
 			continue
 		}
-		if repo.SourceFolderID != "" && !w.descendsFrom(f, repo.SourceFolderID) {
+		if rootID != "" && !w.descendsFrom(f, rootID) {
 			continue
 		}
 		w.files = append(w.files, f)
