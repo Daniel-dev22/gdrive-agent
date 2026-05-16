@@ -10,9 +10,20 @@
 FROM golang:1.25 AS build
 WORKDIR /src
 
+# Bypass the public proxy for our private agent-kit-go module so go mod
+# download hits GitHub via git+SSH. The build invocation must pass
+# `--ssh default` so the host's SSH agent is mounted only during the
+# `RUN --mount=type=ssh` below — the key never lands in the image.
+# Ansible playbook handles this.
+RUN apt-get update && apt-get install -y --no-install-recommends openssh-client && rm -rf /var/lib/apt/lists/*
+ENV GOPRIVATE=github.com/Daniel-dev22/*
+RUN git config --global url."git@github.com:".insteadOf "https://github.com/" && \
+    mkdir -p /root/.ssh && \
+    ssh-keyscan -t rsa,ecdsa,ed25519 github.com >> /root/.ssh/known_hosts
+
 # Pre-download deps so the layer caches across source-only changes.
 COPY go.mod go.sum* ./
-RUN go mod download
+RUN --mount=type=ssh go mod download
 
 # Source.
 COPY cmd/ ./cmd/

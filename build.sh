@@ -19,12 +19,51 @@ setup_buildx() {
   echo -e "${GREEN}Buildx setup completed${NC}"
 }
 
+# setup_ssh_agent ensures SSH_AUTH_SOCK points at an agent with the
+# id_rsa_github key loaded, so `docker buildx build --ssh default` can
+# fetch the private agent-kit-go module from GitHub. If no agent is
+# already forwarded we spin up a transient one for this build and add
+# the discovered key. Killed on exit by cleanup_buildx.
+setup_ssh_agent() {
+  if [ -n "${SSH_AUTH_SOCK:-}" ] && ssh-add -l >/dev/null 2>&1; then
+    echo -e "${GREEN}Reusing forwarded SSH agent at ${SSH_AUTH_SOCK}${NC}"
+    return
+  fi
+  local key=""
+  for candidate in \
+    "${SSH_GITHUB_KEY:-}" \
+    "/root/.ssh/id_rsa_github" \
+    "/home/user/.ssh/id_rsa_github" \
+    "/mnt/storage/ansible/.ssh/id_rsa_github"; do
+    if [ -n "${candidate}" ] && [ -r "${candidate}" ]; then
+      key="${candidate}"
+      break
+    fi
+  done
+  if [ -z "${key}" ]; then
+    echo -e "${RED}ERROR: no SSH agent forwarded and no id_rsa_github key found at the usual paths${NC}"
+    echo -e "${RED}Cannot fetch the private agent-kit-go module. Either run with a forwarded SSH agent or place id_rsa_github at one of: /root/.ssh, /home/user/.ssh, /mnt/storage/ansible/.ssh${NC}"
+    exit 1
+  fi
+  echo -e "${YELLOW}Starting transient ssh-agent and loading ${key}...${NC}"
+  eval "$(ssh-agent -s)" >/dev/null
+  ssh-add "${key}" >/dev/null 2>&1
+  _STARTED_SSH_AGENT=1
+}
+
+cleanup_ssh_agent() {
+  if [ "${_STARTED_SSH_AGENT:-0}" = "1" ] && [ -n "${SSH_AGENT_PID:-}" ]; then
+    kill "${SSH_AGENT_PID}" >/dev/null 2>&1 || true
+  fi
+}
+
 cleanup_buildx() {
   echo -e "${YELLOW}Cleaning up Docker buildx...${NC}"
   docker buildx prune -f >/dev/null 2>&1 || true
   if docker buildx inspect gdrive-agent-builder &>/dev/null; then
     docker buildx rm gdrive-agent-builder --force >/dev/null 2>&1 || true
   fi
+  cleanup_ssh_agent
   echo -e "${GREEN}Buildx cleanup completed${NC}"
 }
 trap cleanup_buildx EXIT
@@ -86,9 +125,20 @@ else
   PLATFORMS="${NATIVE_ARCH}"
 fi
 
+setup_ssh_agent
+
 echo -e "${GREEN}===== Building ${IMAGE_NAME} =====${NC}"
 
+# --ssh default forwards the host's SSH agent to the build only for
+# RUN --mount=type=ssh steps in the Dockerfile. The key is required to
+# fetch the private github.com/Daniel-dev22/agent-kit-go module via
+# git+SSH (GOPRIVATE in the Dockerfile bypasses the public proxy). The
+# key never lands in the image — only mounted during go mod download.
+#
+# Requires SSH_AUTH_SOCK on the build host, set up via the operator's
+# SSH agent before invoking this script (ansible build playbook does so).
 if docker buildx build \
+  --ssh default \
   --platform "${PLATFORMS}" \
   -t "${REGISTRY}/${IMAGE_NAME}:latest" \
   -t "${REGISTRY}/${IMAGE_NAME}:${TIMESTAMP}" \

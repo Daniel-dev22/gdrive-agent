@@ -15,6 +15,8 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/rs/zerolog/log"
 
+	kitsched "github.com/Daniel-dev22/agent-kit-go/scheduler"
+
 	"github.com/Daniel-dev22/gdrive-agent/internal/config"
 	"github.com/Daniel-dev22/gdrive-agent/internal/db"
 	"github.com/Daniel-dev22/gdrive-agent/internal/drive"
@@ -31,6 +33,12 @@ type App struct {
 	Factory *drive.ClientFactory
 	Runner  *job.Runner
 	Fleet   *fleet.Hub
+
+	// Scheduler is the per-host cron scheduler from agent-kit-go. Pulled
+	// from <CONTROL_CENTER_URL>/api/gdrive/schedules?node=<self>, cached
+	// to disk, and ticked locally — controller scheduler-api + EDA
+	// are NOT in the firing path (mirrors duplicacy-agent).
+	Scheduler *kitsched.Scheduler
 
 	// SecretsFetcher returns the per-account credentials bundle for JOB
 	// execution. In production this calls the router's
@@ -215,12 +223,20 @@ func (a *App) handleInvalidateCredential(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"invalidated": c.Param("id")})
 }
 
-// handleSchedulesRefresh is a phase-8 stub. Logs the nudge so operators can
-// confirm the wire is connected, and 200s. The actual scheduler loop arrives
-// in the schedules phase.
+// handleSchedulesRefresh forces an early reconcile pull from
+// <CONTROL_CENTER_URL>/api/gdrive/schedules?node=<self>. Used by the
+// controller router after a CRUD write so the agent doesn't have
+// to wait for the 5-min reconcile tick.
 func (a *App) handleSchedulesRefresh(c *gin.Context) {
-	log.Info().Msg("schedules refresh requested (no-op until scheduler phase)")
-	c.JSON(http.StatusOK, gin.H{"status": "noop"})
+	if a.Scheduler == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "scheduler not initialized"})
+		return
+	}
+	if err := a.Scheduler.Pull(c.Request.Context()); err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"refreshed": true})
 }
 
 // ----- jobs -----

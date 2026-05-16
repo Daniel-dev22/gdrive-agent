@@ -23,6 +23,7 @@ import (
 	"github.com/Daniel-dev22/gdrive-agent/internal/fleet"
 	"github.com/Daniel-dev22/gdrive-agent/internal/job"
 	"github.com/Daniel-dev22/gdrive-agent/internal/router"
+	"github.com/Daniel-dev22/gdrive-agent/internal/schedules"
 	"github.com/Daniel-dev22/gdrive-agent/internal/ws"
 )
 
@@ -117,6 +118,20 @@ func main() {
 	app.Fleet = hub
 
 	go hub.Run(ctx)
+
+	// Per-host cron scheduler (agent-kit-go). Pulls schedules from
+	// <CONTROL_CENTER_URL>/api/gdrive/schedules?node=<self> every 5 min,
+	// fires matching schedules every minute via runner.StartBackup. Disk
+	// cache survives pod restart so a restart in the middle of a fire
+	// minute does not double-fire and a long outage does not flood with
+	// catch-up runs (MissPolicy enforced by the kit).
+	sched, err := schedules.New(cfg, routerHTTP, runner)
+	if err != nil {
+		log.Fatal().Err(err).Msg("scheduler init")
+	}
+	app.Scheduler = sched
+	sched.Start(ctx)
+	defer sched.Stop()
 
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
