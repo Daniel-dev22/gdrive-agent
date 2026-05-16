@@ -193,6 +193,12 @@ func (r *Runner) runBackup(ctx context.Context, h *JobHandle, repo db.RepoRow) {
 		r.markFailed(ctx, h, fmt.Errorf("collect files: %w", err))
 		return
 	}
+	// Now that the in-scope file count is known, stamp it on the row so
+	// the fleet snapshot can broadcast a denominator for progress percent.
+	// Fire onChange so the UI's progress bar transitions from
+	// indeterminate ("listing…") to determinate as soon as we know.
+	h.Row.TotalFiles = len(walker.files)
+	r.onChange()
 
 	prevManifest := manifestStore.Snapshot()
 	seenIDs := map[string]bool{}
@@ -349,7 +355,11 @@ func (r *Runner) runBackup(ctx context.Context, h *JobHandle, repo db.RepoRow) {
 
 		r.logInfo(h, "downloaded", "file_id", file.Id, "path", path, "bytes", fmt.Sprintf("%d", res.Size))
 
-		if h.Row.FilesChanged%25 == 0 {
+		// Persist + broadcast every 5 files so the UI's progress bar feels
+		// live without thrashing SQLite or the fleet hub on bursty
+		// downloads (with 8 concurrent downloaders this is ~once per
+		// second on average).
+		if h.Row.FilesChanged%5 == 0 {
 			_ = r.store.UpsertJob(ctx, h.Row)
 			r.onChange()
 		}

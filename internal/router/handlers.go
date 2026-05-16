@@ -372,7 +372,9 @@ func (a *App) handleListSnapshots(c *gin.Context) {
 			out = append(out, map[string]any{"version": iso, "label": iso})
 		}
 	}
-	c.JSON(http.StatusOK, out)
+	// Frontend (gdrive-api.ts node.snapshots) reads response.versions, so
+	// wrap the array in an envelope instead of returning a bare array.
+	c.JSON(http.StatusOK, gin.H{"versions": out})
 }
 
 // handleSnapshotFiles returns the file tree at a chosen version. "Current"

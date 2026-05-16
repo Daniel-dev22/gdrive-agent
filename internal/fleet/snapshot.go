@@ -3,6 +3,7 @@ package fleet
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"runtime"
 	"sync"
 	"time"
@@ -34,16 +35,23 @@ type Snapshot struct {
 // LiveJob is the snapshot-friendly subset of an in-flight job. Detailed
 // log lines stream separately via /ws/jobs/:id/logs — the fleet WS only
 // needs to convey "what's running right now" for the dashboard tile.
+//
+// TotalFiles is the in-scope file count discovered by collectFiles().
+// Zero until the file-listing phase finishes (Drive files.list paging
+// can take 10-30s for large drives). The frontend derives progress
+// percent from FilesChanged/TotalFiles; renders an indeterminate bar
+// while TotalFiles is 0.
 type LiveJob struct {
-	ID              string `json:"id"`
-	RepoID          string `json:"repo_id"`
-	AccountID       string `json:"account_id"`
-	Action          string `json:"action"`
-	State           string `json:"state"`
-	FilesSeen       int    `json:"files_seen"`
-	FilesChanged    int    `json:"files_changed"`
-	BytesDownloaded int64  `json:"bytes_downloaded"`
-	APICalls        int    `json:"api_calls"`
+	ID              string    `json:"id"`
+	RepoID          string    `json:"repo_id"`
+	AccountID       string    `json:"account_id"`
+	Action          string    `json:"action"`
+	State           string    `json:"state"`
+	FilesSeen       int       `json:"files_seen"`
+	FilesChanged    int       `json:"files_changed"`
+	BytesDownloaded int64     `json:"bytes_downloaded"`
+	APICalls        int       `json:"api_calls"`
+	TotalFiles      int       `json:"total_files"`
 	StartedAt       time.Time `json:"started_at"`
 }
 
@@ -75,6 +83,14 @@ func (b *Builder) Build(ctx context.Context) (Snapshot, error) {
 	if err != nil {
 		return Snapshot{}, err
 	}
+	// Always recompute dest_local_path from the live BACKUP_ROOT — the
+	// SQLite value can be stale after the operator moves the backup pool
+	// (the row's path was captured at /repos/init time and never updated).
+	// The runner itself uses filepath.Join(BACKUP_ROOT, AccountID), so
+	// rewriting the wire shape keeps the UI in sync with reality.
+	for i := range repos {
+		repos[i].DestLocalPath = filepath.Join(b.BackupRoot, repos[i].AccountID)
+	}
 	jobs, err := b.Runner.SnapshotJobs(ctx, 50)
 	if err != nil {
 		return Snapshot{}, err
@@ -91,6 +107,7 @@ func (b *Builder) Build(ctx context.Context) (Snapshot, error) {
 			FilesChanged:    h.Row.FilesChanged,
 			BytesDownloaded: h.Row.BytesDownloaded,
 			APICalls:        h.Row.APICalls,
+			TotalFiles:      h.Row.TotalFiles,
 			StartedAt:       h.Row.StartedAt,
 		})
 	}

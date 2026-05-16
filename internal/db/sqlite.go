@@ -415,6 +415,12 @@ type JobRow struct {
 	FilesChanged    int        `json:"files_changed"`
 	BytesDownloaded int64      `json:"bytes_downloaded"`
 	APICalls        int        `json:"api_calls"`
+	// TotalFiles is the in-scope file count known after collectFiles
+	// finishes paging Drive's files.list. Used by the UI to compute
+	// progress percent (FilesChanged/TotalFiles). Transient — not
+	// persisted to SQLite (no schema column), only ever populated on
+	// in-flight JobHandles via the runner.
+	TotalFiles      int        `json:"total_files"`
 	ScheduleID      string     `json:"schedule_id,omitempty"`
 	TriggerKey      string     `json:"trigger_key,omitempty"`
 	UpdatedAt       time.Time  `json:"updated_at"`
