@@ -374,41 +374,48 @@ func boolToInt(b bool) int {
 	return 0
 }
 
-// RepoRow is the SQLite row shape for repos.
+// RepoRow is the SQLite row shape for repos. JSON tags match the wire
+// shape the controller frontend's Repo interface expects
+// (gdrive-api.ts) so /repos, /ws/fleet, and /api/gdrive/<node>/* return
+// snake_case keys the UI can consume without an extra mapping layer.
 type RepoRow struct {
-	ID                 string
-	AccountID          string
-	SourceFolderID     string
-	SourceLabel        string
-	DestLocalPath      string
-	KeepVersions       int
-	GraveyardKeepDays  int
-	ConditionalGet     bool
-	PullDriveRevisions bool
-	FilterIncludeMime  string // CSV
-	FilterExcludePaths string // CSV
-	LastBackupAt       *time.Time
-	LastBackupJobID    string
-	CreatedAt          time.Time
-	UpdatedAt          time.Time
+	ID                 string     `json:"id"`
+	AccountID          string     `json:"account_id"`
+	SourceFolderID     string     `json:"source_drive_folder_id"`
+	SourceLabel        string     `json:"source_drive_label"`
+	DestLocalPath      string     `json:"dest_local_path"`
+	KeepVersions       int        `json:"keep_versions"`
+	GraveyardKeepDays  int        `json:"graveyard_keep_days"`
+	ConditionalGet     bool       `json:"conditional_get"`
+	PullDriveRevisions bool       `json:"pull_drive_revisions"`
+	FilterIncludeMime  string     `json:"filter_include_mime"` // CSV
+	FilterExcludePaths string     `json:"filter_exclude_paths"` // CSV
+	LastBackupAt       *time.Time `json:"last_backup_at,omitempty"`
+	LastBackupJobID    string     `json:"last_backup_job_id,omitempty"`
+	CreatedAt          time.Time  `json:"created_at"`
+	UpdatedAt          time.Time  `json:"updated_at"`
 }
 
-// JobRow is the SQLite row shape for jobs.
+// JobRow is the SQLite row shape for jobs. JSON tags match the wire
+// shape the controller frontend's Job interface expects
+// (gdrive-api.ts) — the useGdriveFleet hook filters activeJobs by
+// j.state === 'running', so without snake_case keys here the UI sees
+// every state field as undefined and renders zero active jobs.
 type JobRow struct {
-	ID              string
-	RepoID          string
-	AccountID       string
-	Action          string
-	State           string
-	StartedAt       time.Time
-	CompletedAt     *time.Time
-	ExitCode        *int
-	Error           string
-	FilesSeen       int
-	FilesChanged    int
-	BytesDownloaded int64
-	APICalls        int
-	ScheduleID      string
-	TriggerKey      string
-	UpdatedAt       time.Time
+	ID              string     `json:"id"`
+	RepoID          string     `json:"repo_id"`
+	AccountID       string     `json:"account_id"`
+	Action          string     `json:"action"`
+	State           string     `json:"state"`
+	StartedAt       time.Time  `json:"started_at"`
+	CompletedAt     *time.Time `json:"completed_at,omitempty"`
+	ExitCode        *int       `json:"exit_code,omitempty"`
+	Error           string     `json:"error,omitempty"`
+	FilesSeen       int        `json:"files_seen"`
+	FilesChanged    int        `json:"files_changed"`
+	BytesDownloaded int64      `json:"bytes_downloaded"`
+	APICalls        int        `json:"api_calls"`
+	ScheduleID      string     `json:"schedule_id,omitempty"`
+	TriggerKey      string     `json:"trigger_key,omitempty"`
+	UpdatedAt       time.Time  `json:"updated_at"`
 }
