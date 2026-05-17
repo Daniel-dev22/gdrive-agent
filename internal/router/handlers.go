@@ -93,9 +93,11 @@ func (a *App) RegisterRoutes(r *gin.Engine) {
 	auth.GET("/jobs", a.handleListJobs)
 	auth.GET("/jobs/:id", a.handleGetJob)
 
-	// Snapshots + file streaming.
-	auth.GET("/snapshots/:repo", a.handleListSnapshots)
+	// Live-mirror file listing + per-file revision history + file streaming.
+	// gdrive has no atomic snapshots; the picker browses the live tree and
+	// drills into each file's rotated revision history.
 	auth.GET("/snapshots/:repo/:revision/files", a.handleSnapshotFiles)
+	auth.GET("/revisions/:repo/:file_id", a.handleFileRevisions)
 	auth.GET("/files/:repo/:version/*path", a.handleStreamFile)
 
 	// Drive folder picker (proxies a server-side Drive call so the UI
@@ -331,67 +333,13 @@ func (a *App) handleGetJob(c *gin.Context) {
 
 // ----- snapshots / file stream -----
 
-// versionRow matches the frontend `Version` interface in
-// frontend/src/lib/gdrive-api.ts — `timestamp`, `size`, `sanitized_name`.
-// One row per distinct ISO timestamp; size is the aggregate bytes of all
-// file revisions captured at that timestamp (NOT the size of the full Drive
-// at that moment).
-type versionRow struct {
-	Timestamp     string `json:"timestamp"`
-	Size          int64  `json:"size"`
-	SanitizedName string `json:"sanitized_name"`
-}
-
-// handleListSnapshots returns the set of distinct version timestamps across
-// all files in a repo. UI uses this to render the "pick a version" picker.
-func (a *App) handleListSnapshots(c *gin.Context) {
-	repoID := c.Param("repo")
-	repo, err := a.Store.GetRepo(c.Request.Context(), repoID)
-	if err != nil {
-		if db.IsNoRows(err) {
-			c.JSON(http.StatusNotFound, gin.H{"error": "repo not found"})
-			return
-		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	accountRoot := filepath.Join(a.Cfg.BackupRoot, repo.AccountID)
-	ms, err := storage.NewManifestStore(a.Cfg.BackupRoot, repo.AccountID)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	snap := ms.Snapshot()
-	sizeByISO := map[string]int64{}
-	for fileID := range snap {
-		dir := filepath.Join(accountRoot, "_versions", fileID)
-		ents, err := os.ReadDir(dir)
-		if err != nil {
-			continue
-		}
-		for _, e := range ents {
-			iso, _, ok := storage.SplitVersionName(e.Name())
-			if !ok {
-				continue
-			}
-			info, err := e.Info()
-			if err != nil {
-				continue
-			}
-			sizeByISO[iso] += info.Size()
-		}
-	}
-	out := make([]versionRow, 0, len(sizeByISO))
-	for iso, size := range sizeByISO {
-		out = append(out, versionRow{Timestamp: iso, Size: size})
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Timestamp > out[j].Timestamp })
-	c.JSON(http.StatusOK, gin.H{"versions": out})
-}
-
-// handleSnapshotFiles returns the file tree at a chosen version. "Current"
-// uses the manifest directly; an ISO version filters to files that have a
-// matching prefix in _versions/<id>/.
+// handleSnapshotFiles returns the live-mirror file tree. The legacy
+// /snapshots/:repo aggregate-version endpoint was dropped — gdrive isn't
+// snapshot-based, so the picker browses the current tree (here) and drills
+// into per-file revisions via handleFileRevisions. The `:revision` URL
+// segment is preserved for the "current" path; non-current values filter
+// to files that have a matching prefix in _versions/<id>/ (rarely used
+// directly by the UI now).
 func (a *App) handleSnapshotFiles(c *gin.Context) {
 	repoID := c.Param("repo")
 	rev := c.Param("revision")
@@ -404,11 +352,12 @@ func (a *App) handleSnapshotFiles(c *gin.Context) {
 	ms, _ := storage.NewManifestStore(a.Cfg.BackupRoot, repo.AccountID)
 	snap := ms.Snapshot()
 	type entry struct {
-		FileID  string `json:"file_id"`
-		Path    string `json:"path"`
-		Size    int64  `json:"size"`
-		Mime    string `json:"mime_type"`
-		HasFile bool   `json:"has_file"`
+		FileID        string `json:"file_id"`
+		Path          string `json:"path"`
+		Size          int64  `json:"size"`
+		Mime          string `json:"mime_type"`
+		HasFile       bool   `json:"has_file"`
+		RevisionCount int    `json:"revision_count"`
 	}
 	out := []entry{}
 	for fid, mf := range snap {
@@ -432,9 +381,59 @@ func (a *App) handleSnapshotFiles(c *gin.Context) {
 		if !hasFile {
 			continue
 		}
-		out = append(out, entry{FileID: fid, Path: mf.Path, Size: mf.Size, Mime: mf.MimeType, HasFile: true})
+		out = append(out, entry{
+			FileID:        fid,
+			Path:          mf.Path,
+			Size:          mf.Size,
+			Mime:          mf.MimeType,
+			HasFile:       true,
+			RevisionCount: mf.VersionCount,
+		})
 	}
-	c.JSON(http.StatusOK, out)
+	c.JSON(http.StatusOK, gin.H{"files": out})
+}
+
+// handleFileRevisions returns the rotated version history for a single file.
+// Each entry is one row in _versions/<file_id>/<iso>__<name>. Newest first.
+// Sized via os.Stat; rows where Stat fails are skipped.
+func (a *App) handleFileRevisions(c *gin.Context) {
+	repoID := c.Param("repo")
+	fileID := c.Param("file_id")
+	repo, err := a.Store.GetRepo(c.Request.Context(), repoID)
+	if err != nil {
+		if db.IsNoRows(err) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "repo not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	accountRoot := filepath.Join(a.Cfg.BackupRoot, repo.AccountID)
+	layout := storage.NewVersionLayout(accountRoot)
+	names, err := layout.ListVersions(fileID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	type revisionRow struct {
+		Timestamp     string `json:"timestamp"`
+		Size          int64  `json:"size"`
+		SanitizedName string `json:"sanitized_name"`
+	}
+	out := make([]revisionRow, 0, len(names))
+	for _, n := range names {
+		iso, display, ok := storage.SplitVersionName(n)
+		if !ok {
+			continue
+		}
+		info, err := os.Stat(layout.VersionPath(fileID, n))
+		if err != nil {
+			continue
+		}
+		out = append(out, revisionRow{Timestamp: iso, Size: info.Size(), SanitizedName: display})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Timestamp > out[j].Timestamp })
+	c.JSON(http.StatusOK, gin.H{"revisions": out})
 }
 
 // handleStreamFile streams one file version to the caller (router → browser)
