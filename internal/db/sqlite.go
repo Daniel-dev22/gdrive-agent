@@ -182,12 +182,21 @@ func (s *Store) UpsertRepo(ctx context.Context, r RepoRow) error {
 
 // GetRepo loads one repo by id. ErrNoRows means absent (caller should 404).
 func (s *Store) GetRepo(ctx context.Context, id string) (RepoRow, error) {
+	// last_backup_at + last_backup_job_id are derived from the jobs table —
+	// the column on `repos` is never written by anything, so reading it would
+	// always return NULL and the UI would show "No backups yet" forever.
+	// The jobs table is the source of truth for completion events.
 	row := s.DB.QueryRowContext(ctx, `
-		SELECT id, account_id, source_folder_id, source_label, dest_local_path,
-		       keep_versions, graveyard_keep_days, conditional_get, pull_drive_revisions,
-		       filter_include_mime, filter_exclude_paths,
-		       last_backup_at, last_backup_job_id, created_at, updated_at
-		FROM repos WHERE id = ?
+		SELECT r.id, r.account_id, r.source_folder_id, r.source_label, r.dest_local_path,
+		       r.keep_versions, r.graveyard_keep_days, r.conditional_get, r.pull_drive_revisions,
+		       r.filter_include_mime, r.filter_exclude_paths,
+		       (SELECT MAX(completed_at) FROM jobs
+		         WHERE repo_id = r.id AND action = 'backup' AND state = 'completed') AS last_backup_at,
+		       (SELECT id FROM jobs
+		         WHERE repo_id = r.id AND action = 'backup' AND state = 'completed'
+		         ORDER BY completed_at DESC LIMIT 1) AS last_backup_job_id,
+		       r.created_at, r.updated_at
+		FROM repos r WHERE r.id = ?
 	`, id)
 	var r RepoRow
 	var cond, pull int
@@ -218,13 +227,20 @@ func (s *Store) GetRepo(ctx context.Context, id string) (RepoRow, error) {
 }
 
 // ListRepos returns all repo rows. Used by the fleet snapshot builder.
+// last_backup_at + last_backup_job_id are derived from the jobs table (see
+// GetRepo for the why).
 func (s *Store) ListRepos(ctx context.Context) ([]RepoRow, error) {
 	rows, err := s.DB.QueryContext(ctx, `
-		SELECT id, account_id, source_folder_id, source_label, dest_local_path,
-		       keep_versions, graveyard_keep_days, conditional_get, pull_drive_revisions,
-		       filter_include_mime, filter_exclude_paths,
-		       last_backup_at, last_backup_job_id, created_at, updated_at
-		FROM repos ORDER BY created_at DESC
+		SELECT r.id, r.account_id, r.source_folder_id, r.source_label, r.dest_local_path,
+		       r.keep_versions, r.graveyard_keep_days, r.conditional_get, r.pull_drive_revisions,
+		       r.filter_include_mime, r.filter_exclude_paths,
+		       (SELECT MAX(completed_at) FROM jobs
+		         WHERE repo_id = r.id AND action = 'backup' AND state = 'completed') AS last_backup_at,
+		       (SELECT id FROM jobs
+		         WHERE repo_id = r.id AND action = 'backup' AND state = 'completed'
+		         ORDER BY completed_at DESC LIMIT 1) AS last_backup_job_id,
+		       r.created_at, r.updated_at
+		FROM repos r ORDER BY r.created_at DESC
 	`)
 	if err != nil {
 		return nil, err
