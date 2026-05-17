@@ -200,14 +200,17 @@ func (s *Store) GetRepo(ctx context.Context, id string) (RepoRow, error) {
 	`, id)
 	var r RepoRow
 	var cond, pull int
-	var lastBackupAt sql.NullTime
+	// last_backup_at comes through a correlated subquery — modernc.org/sqlite
+	// returns subquery values as raw strings (no column affinity), so we
+	// scan into NullString and parse manually rather than NullTime.
+	var lastBackupAtStr sql.NullString
 	var lastJob sql.NullString
 	var fInc, fExc sql.NullString
 	var srcLabel, srcFolder sql.NullString
 	err := row.Scan(&r.ID, &r.AccountID, &srcFolder, &srcLabel, &r.DestLocalPath,
 		&r.KeepVersions, &r.GraveyardKeepDays, &cond, &pull,
 		&fInc, &fExc,
-		&lastBackupAt, &lastJob, &r.CreatedAt, &r.UpdatedAt)
+		&lastBackupAtStr, &lastJob, &r.CreatedAt, &r.UpdatedAt)
 	if err != nil {
 		return r, err
 	}
@@ -217,13 +220,37 @@ func (s *Store) GetRepo(ctx context.Context, id string) (RepoRow, error) {
 	r.SourceLabel = srcLabel.String
 	r.FilterIncludeMime = fInc.String
 	r.FilterExcludePaths = fExc.String
-	if lastBackupAt.Valid {
-		r.LastBackupAt = &lastBackupAt.Time
+	if t, ok := parseSubqueryTimestamp(lastBackupAtStr); ok {
+		r.LastBackupAt = &t
 	}
 	if lastJob.Valid {
 		r.LastBackupJobID = lastJob.String
 	}
 	return r, nil
+}
+
+// parseSubqueryTimestamp converts a subquery TIMESTAMP value (which
+// modernc.org/sqlite returns as a raw string instead of applying the
+// driver's TIMESTAMP→time.Time conversion) into a time.Time. Tries the
+// formats Go's database/sql uses when writing time.Time into a TIMESTAMP
+// column. Returns ok=false on empty or unparseable input.
+func parseSubqueryTimestamp(s sql.NullString) (time.Time, bool) {
+	if !s.Valid || s.String == "" {
+		return time.Time{}, false
+	}
+	for _, layout := range []string{
+		"2006-01-02 15:04:05.999999999 -0700 MST",
+		"2006-01-02 15:04:05.999999999-07:00",
+		"2006-01-02 15:04:05-07:00",
+		"2006-01-02T15:04:05.999999999Z07:00",
+		time.RFC3339Nano,
+		time.RFC3339,
+	} {
+		if t, err := time.Parse(layout, s.String); err == nil {
+			return t, true
+		}
+	}
+	return time.Time{}, false
 }
 
 // ListRepos returns all repo rows. Used by the fleet snapshot builder.
@@ -250,14 +277,14 @@ func (s *Store) ListRepos(ctx context.Context) ([]RepoRow, error) {
 	for rows.Next() {
 		var r RepoRow
 		var cond, pull int
-		var lastBackupAt sql.NullTime
+		var lastBackupAtStr sql.NullString
 		var lastJob sql.NullString
 		var fInc, fExc sql.NullString
 		var srcLabel, srcFolder sql.NullString
 		if err := rows.Scan(&r.ID, &r.AccountID, &srcFolder, &srcLabel, &r.DestLocalPath,
 			&r.KeepVersions, &r.GraveyardKeepDays, &cond, &pull,
 			&fInc, &fExc,
-			&lastBackupAt, &lastJob, &r.CreatedAt, &r.UpdatedAt); err != nil {
+			&lastBackupAtStr, &lastJob, &r.CreatedAt, &r.UpdatedAt); err != nil {
 			return nil, err
 		}
 		r.ConditionalGet = cond != 0
@@ -266,8 +293,8 @@ func (s *Store) ListRepos(ctx context.Context) ([]RepoRow, error) {
 		r.SourceLabel = srcLabel.String
 		r.FilterIncludeMime = fInc.String
 		r.FilterExcludePaths = fExc.String
-		if lastBackupAt.Valid {
-			r.LastBackupAt = &lastBackupAt.Time
+		if t, ok := parseSubqueryTimestamp(lastBackupAtStr); ok {
+			r.LastBackupAt = &t
 		}
 		if lastJob.Valid {
 			r.LastBackupJobID = lastJob.String
