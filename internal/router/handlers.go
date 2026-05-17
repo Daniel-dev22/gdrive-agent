@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -330,6 +331,17 @@ func (a *App) handleGetJob(c *gin.Context) {
 
 // ----- snapshots / file stream -----
 
+// versionRow matches the frontend `Version` interface in
+// frontend/src/lib/gdrive-api.ts — `timestamp`, `size`, `sanitized_name`.
+// One row per distinct ISO timestamp; size is the aggregate bytes of all
+// file revisions captured at that timestamp (NOT the size of the full Drive
+// at that moment).
+type versionRow struct {
+	Timestamp     string `json:"timestamp"`
+	Size          int64  `json:"size"`
+	SanitizedName string `json:"sanitized_name"`
+}
+
 // handleListSnapshots returns the set of distinct version timestamps across
 // all files in a repo. UI uses this to render the "pick a version" picker.
 func (a *App) handleListSnapshots(c *gin.Context) {
@@ -350,10 +362,7 @@ func (a *App) handleListSnapshots(c *gin.Context) {
 		return
 	}
 	snap := ms.Snapshot()
-	// Distinct ISO timestamps across every file's _versions/<id>/<iso>__...
-	// Always include "current" at the top.
-	seen := map[string]struct{}{}
-	out := []map[string]any{{"version": "current", "label": "Current (live mirror)"}}
+	sizeByISO := map[string]int64{}
 	for fileID := range snap {
 		dir := filepath.Join(accountRoot, "_versions", fileID)
 		ents, err := os.ReadDir(dir)
@@ -365,15 +374,18 @@ func (a *App) handleListSnapshots(c *gin.Context) {
 			if !ok {
 				continue
 			}
-			if _, dup := seen[iso]; dup {
+			info, err := e.Info()
+			if err != nil {
 				continue
 			}
-			seen[iso] = struct{}{}
-			out = append(out, map[string]any{"version": iso, "label": iso})
+			sizeByISO[iso] += info.Size()
 		}
 	}
-	// Frontend (gdrive-api.ts node.snapshots) reads response.versions, so
-	// wrap the array in an envelope instead of returning a bare array.
+	out := make([]versionRow, 0, len(sizeByISO))
+	for iso, size := range sizeByISO {
+		out = append(out, versionRow{Timestamp: iso, Size: size})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Timestamp > out[j].Timestamp })
 	c.JSON(http.StatusOK, gin.H{"versions": out})
 }
 
