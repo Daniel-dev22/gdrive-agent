@@ -268,6 +268,34 @@ func (s *Store) DeleteRepo(ctx context.Context, id string) error {
 	return err
 }
 
+// MarkOrphanedJobsFailed flips every job still recorded as running or
+// pending into "failed" with a fixed error message. Called once at agent
+// startup — a JobHandle/goroutine is conceptually tied to a runtime
+// instance and never survives a process restart, so any "running" row
+// in SQLite after boot is an orphan from a prior crash/redeploy.
+// Without this sweep the UI keeps surfacing those rows in activeJobs
+// forever, and operator clicks (Cancel, View Log) 404 because the
+// runtime has no in-memory handle.
+//
+// Returns the number of rows remediated for logging.
+func (s *Store) MarkOrphanedJobsFailed(ctx context.Context) (int, error) {
+	now := time.Now().UTC()
+	res, err := s.DB.ExecContext(ctx, `
+		UPDATE jobs
+		   SET state        = 'failed',
+		       completed_at = ?,
+		       exit_code    = 1,
+		       error        = 'agent restarted while job was in flight',
+		       updated_at   = ?
+		 WHERE state IN ('running','pending')`,
+		now, now)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
+}
+
 // UpsertJob inserts or replaces a job row. Called from the runner on every
 // state transition so the agent's snapshot always reflects truth.
 func (s *Store) UpsertJob(ctx context.Context, j JobRow) error {

@@ -68,6 +68,18 @@ func main() {
 	}
 	defer store.Close()
 
+	// Sweep orphaned running/pending jobs left over from a prior crash
+	// or redeploy. A JobHandle + goroutine is runtime-bound; SQLite rows
+	// stuck in "running" after a fresh boot are by definition dead. If
+	// we leave them as-is they show up in the UI's activeJobs forever,
+	// and operator clicks (Cancel, View Log) 404 because the runtime
+	// has no in-memory handle to dispatch to.
+	if n, err := store.MarkOrphanedJobsFailed(ctx); err != nil {
+		log.Warn().Err(err).Msg("orphan job sweep failed")
+	} else if n > 0 {
+		log.Info().Int("count", n).Msg("marked orphaned jobs as failed (boot remediation)")
+	}
+
 	factory := drive.NewClientFactory()
 	limiter := drive.NewAdaptiveLimiter(cfg.MaxRPS, cfg.MaxConcurrent)
 	limiter.StartRamper(ctx)
