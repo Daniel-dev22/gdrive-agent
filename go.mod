@@ -1,6 +1,6 @@
 module github.com/Daniel-dev22/gdrive-agent
 
-go 1.25.0
+go 1.26
 
 require (
 	github.com/Daniel-dev22/agent-kit-go v0.1.1

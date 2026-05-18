@@ -7,7 +7,7 @@
 #
 # Final image is ~25MB.
 
-FROM golang:1.25 AS build
+FROM golang:1.26 AS build
 WORKDIR /src
 
 # Bypass the public proxy for our private agent-kit-go module so go mod
