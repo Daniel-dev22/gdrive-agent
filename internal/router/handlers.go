@@ -452,6 +452,11 @@ func (a *App) handleStreamFile(c *gin.Context) {
 	repoID := c.Param("repo")
 	version := c.Param("version")
 	pathParam := strings.TrimPrefix(c.Param("path"), "/")
+	// Frontend appends a `/raw` suffix so the download URL reads "/.../FILEID/raw".
+	// Gin's *path catch-all greedily includes that suffix; strip it so the
+	// manifest lookup runs with the bare file ID. Leaving room for future
+	// per-file metadata suffixes (/meta, /etag) following the same pattern.
+	pathParam = strings.TrimSuffix(pathParam, "/raw")
 	if pathParam == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "file id required in path"})
 		return
@@ -611,6 +616,11 @@ func (a *App) EventEmitter() job.EventEmitter {
 			flat["trigger_key"] = h.Row.TriggerKey
 			flat["files_seen"] = h.Row.FilesSeen
 			flat["files_changed"] = h.Row.FilesChanged
+			flat["files_new"] = h.Row.FilesNew
+			flat["files_versioned"] = h.Row.FilesVersioned
+			flat["files_skipped_meta"] = h.Row.FilesSkippedMeta
+			flat["files_skipped_not_modified"] = h.Row.FilesSkippedNotModified
+			flat["files_deleted"] = h.Row.FilesDeleted
 			flat["bytes_downloaded"] = h.Row.BytesDownloaded
 			flat["api_calls"] = h.Row.APICalls
 		}

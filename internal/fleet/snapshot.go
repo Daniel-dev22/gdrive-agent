@@ -42,17 +42,22 @@ type Snapshot struct {
 // percent from FilesChanged/TotalFiles; renders an indeterminate bar
 // while TotalFiles is 0.
 type LiveJob struct {
-	ID              string    `json:"id"`
-	RepoID          string    `json:"repo_id"`
-	AccountID       string    `json:"account_id"`
-	Action          string    `json:"action"`
-	State           string    `json:"state"`
-	FilesSeen       int       `json:"files_seen"`
-	FilesChanged    int       `json:"files_changed"`
-	BytesDownloaded int64     `json:"bytes_downloaded"`
-	APICalls        int       `json:"api_calls"`
-	TotalFiles      int       `json:"total_files"`
-	StartedAt       time.Time `json:"started_at"`
+	ID                       string    `json:"id"`
+	RepoID                   string    `json:"repo_id"`
+	AccountID                string    `json:"account_id"`
+	Action                   string    `json:"action"`
+	State                    string    `json:"state"`
+	FilesSeen                int       `json:"files_seen"`
+	FilesChanged             int       `json:"files_changed"`
+	FilesNew                 int       `json:"files_new"`
+	FilesVersioned           int       `json:"files_versioned"`
+	FilesSkippedMeta         int       `json:"files_skipped_meta"`
+	FilesSkippedNotModified  int       `json:"files_skipped_not_modified"`
+	FilesDeleted             int       `json:"files_deleted"`
+	BytesDownloaded          int64     `json:"bytes_downloaded"`
+	APICalls                 int       `json:"api_calls"`
+	TotalFiles               int       `json:"total_files"`
+	StartedAt                time.Time `json:"started_at"`
 }
 
 // Builder is the deps bundle the snapshot collector uses. The runner is
@@ -98,17 +103,22 @@ func (b *Builder) Build(ctx context.Context) (Snapshot, error) {
 	live := []LiveJob{}
 	for _, h := range b.Runner.ListLive() {
 		live = append(live, LiveJob{
-			ID:              h.ID,
-			RepoID:          h.Row.RepoID,
-			AccountID:       h.Row.AccountID,
-			Action:          h.Row.Action,
-			State:           h.Row.State,
-			FilesSeen:       h.Row.FilesSeen,
-			FilesChanged:    h.Row.FilesChanged,
-			BytesDownloaded: h.Row.BytesDownloaded,
-			APICalls:        h.Row.APICalls,
-			TotalFiles:      h.Row.TotalFiles,
-			StartedAt:       h.Row.StartedAt,
+			ID:                      h.ID,
+			RepoID:                  h.Row.RepoID,
+			AccountID:               h.Row.AccountID,
+			Action:                  h.Row.Action,
+			State:                   h.Row.State,
+			FilesSeen:               h.Row.FilesSeen,
+			FilesChanged:            h.Row.FilesChanged,
+			FilesNew:                h.Row.FilesNew,
+			FilesVersioned:          h.Row.FilesVersioned,
+			FilesSkippedMeta:        h.Row.FilesSkippedMeta,
+			FilesSkippedNotModified: h.Row.FilesSkippedNotModified,
+			FilesDeleted:            h.Row.FilesDeleted,
+			BytesDownloaded:         h.Row.BytesDownloaded,
+			APICalls:                h.Row.APICalls,
+			TotalFiles:              h.Row.TotalFiles,
+			StartedAt:               h.Row.StartedAt,
 		})
 	}
 	return Snapshot{

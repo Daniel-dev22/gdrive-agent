@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -134,6 +135,21 @@ func (s *Store) migrate(ctx context.Context) error {
 	for _, q := range stmts {
 		if _, err := s.DB.ExecContext(ctx, q); err != nil {
 			return fmt.Errorf("migrate %q: %w", q, err)
+		}
+	}
+	// Evolutions — additive ALTERs for columns added after the original
+	// CREATE TABLE shipped. SQLite doesn't have IF NOT EXISTS for ADD COLUMN,
+	// so we tolerate the "duplicate column" error on re-runs.
+	evolutions := []string{
+		`ALTER TABLE jobs ADD COLUMN files_new INTEGER DEFAULT 0`,
+		`ALTER TABLE jobs ADD COLUMN files_versioned INTEGER DEFAULT 0`,
+		`ALTER TABLE jobs ADD COLUMN files_skipped_meta INTEGER DEFAULT 0`,
+		`ALTER TABLE jobs ADD COLUMN files_skipped_not_modified INTEGER DEFAULT 0`,
+		`ALTER TABLE jobs ADD COLUMN files_deleted INTEGER DEFAULT 0`,
+	}
+	for _, q := range evolutions {
+		if _, err := s.DB.ExecContext(ctx, q); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
+			return fmt.Errorf("evolve %q: %w", q, err)
 		}
 	}
 	return nil
@@ -346,11 +362,15 @@ func (s *Store) UpsertJob(ctx context.Context, j JobRow) error {
 	_, err := s.DB.ExecContext(ctx, `
 		INSERT INTO jobs (
 			id, repo_id, account_id, action, state, started_at, completed_at,
-			exit_code, error, files_seen, files_changed, bytes_downloaded, api_calls,
+			exit_code, error, files_seen, files_changed,
+			files_new, files_versioned, files_skipped_meta, files_skipped_not_modified, files_deleted,
+			bytes_downloaded, api_calls,
 			schedule_id, trigger_key, updated_at
 		) VALUES (
 			?, ?, ?, ?, ?, ?, ?,
-			?, ?, ?, ?, ?, ?,
+			?, ?, ?, ?,
+			?, ?, ?, ?, ?,
+			?, ?,
 			?, ?, ?
 		)
 		ON CONFLICT(id) DO UPDATE SET
@@ -360,12 +380,19 @@ func (s *Store) UpsertJob(ctx context.Context, j JobRow) error {
 			error = excluded.error,
 			files_seen = excluded.files_seen,
 			files_changed = excluded.files_changed,
+			files_new = excluded.files_new,
+			files_versioned = excluded.files_versioned,
+			files_skipped_meta = excluded.files_skipped_meta,
+			files_skipped_not_modified = excluded.files_skipped_not_modified,
+			files_deleted = excluded.files_deleted,
 			bytes_downloaded = excluded.bytes_downloaded,
 			api_calls = excluded.api_calls,
 			updated_at = excluded.updated_at
 	`,
 		j.ID, j.RepoID, j.AccountID, j.Action, j.State, j.StartedAt, j.CompletedAt,
-		j.ExitCode, j.Error, j.FilesSeen, j.FilesChanged, j.BytesDownloaded, j.APICalls,
+		j.ExitCode, j.Error, j.FilesSeen, j.FilesChanged,
+		j.FilesNew, j.FilesVersioned, j.FilesSkippedMeta, j.FilesSkippedNotModified, j.FilesDeleted,
+		j.BytesDownloaded, j.APICalls,
 		j.ScheduleID, j.TriggerKey, j.UpdatedAt,
 	)
 	return err
@@ -375,7 +402,9 @@ func (s *Store) UpsertJob(ctx context.Context, j JobRow) error {
 func (s *Store) GetJob(ctx context.Context, id string) (JobRow, error) {
 	row := s.DB.QueryRowContext(ctx, `
 		SELECT id, repo_id, account_id, action, state, started_at, completed_at,
-		       exit_code, error, files_seen, files_changed, bytes_downloaded, api_calls,
+		       exit_code, error, files_seen, files_changed,
+		       files_new, files_versioned, files_skipped_meta, files_skipped_not_modified, files_deleted,
+		       bytes_downloaded, api_calls,
 		       schedule_id, trigger_key, updated_at
 		FROM jobs WHERE id = ?
 	`, id)
@@ -390,7 +419,9 @@ func (s *Store) ListJobs(ctx context.Context, limit int) ([]JobRow, error) {
 	}
 	rows, err := s.DB.QueryContext(ctx, `
 		SELECT id, repo_id, account_id, action, state, started_at, completed_at,
-		       exit_code, error, files_seen, files_changed, bytes_downloaded, api_calls,
+		       exit_code, error, files_seen, files_changed,
+		       files_new, files_versioned, files_skipped_meta, files_skipped_not_modified, files_deleted,
+		       bytes_downloaded, api_calls,
 		       schedule_id, trigger_key, updated_at
 		FROM jobs ORDER BY started_at DESC LIMIT ?
 	`, limit)
@@ -415,7 +446,9 @@ func scanJob(scan func(...any) error) (JobRow, error) {
 	var exit sql.NullInt64
 	var errStr, schedID, trig sql.NullString
 	err := scan(&j.ID, &j.RepoID, &j.AccountID, &j.Action, &j.State, &j.StartedAt, &completedAt,
-		&exit, &errStr, &j.FilesSeen, &j.FilesChanged, &j.BytesDownloaded, &j.APICalls,
+		&exit, &errStr, &j.FilesSeen, &j.FilesChanged,
+		&j.FilesNew, &j.FilesVersioned, &j.FilesSkippedMeta, &j.FilesSkippedNotModified, &j.FilesDeleted,
+		&j.BytesDownloaded, &j.APICalls,
 		&schedID, &trig, &j.UpdatedAt)
 	if err != nil {
 		return j, err
@@ -483,7 +516,16 @@ type JobRow struct {
 	ExitCode        *int       `json:"exit_code,omitempty"`
 	Error           string     `json:"error,omitempty"`
 	FilesSeen       int        `json:"files_seen"`
-	FilesChanged    int        `json:"files_changed"`
+	// FilesChanged is the sum of FilesNew + FilesVersioned, kept on disk for
+	// backwards-compat with older readers and for at-a-glance "did anything
+	// happen" reporting. Backup runs set it to that sum on each persist.
+	// Restore runs use it directly as "files copied to destination".
+	FilesChanged             int `json:"files_changed"`
+	FilesNew                 int `json:"files_new"`
+	FilesVersioned           int `json:"files_versioned"`
+	FilesSkippedMeta         int `json:"files_skipped_meta"`
+	FilesSkippedNotModified  int `json:"files_skipped_not_modified"`
+	FilesDeleted             int `json:"files_deleted"`
 	BytesDownloaded int64      `json:"bytes_downloaded"`
 	APICalls        int        `json:"api_calls"`
 	// TotalFiles is the in-scope file count known after collectFiles

@@ -235,6 +235,7 @@ func (r *Runner) runBackup(ctx context.Context, h *JobHandle, repo db.RepoRow) {
 			// metadata (path) changed.
 			updated := buildManifestEntry(file, path, prev.Versions, prev.VersionCount)
 			manifestStore.Set(file.Id, updated)
+			h.Row.FilesSkippedMeta++
 			continue
 		}
 
@@ -314,9 +315,15 @@ func (r *Runner) runBackup(ctx context.Context, h *JobHandle, repo db.RepoRow) {
 			// Tier-3 304: refresh manifest timestamp/metadata only.
 			updated := buildManifestEntry(file, path, prev.Versions, prev.VersionCount)
 			manifestStore.Set(file.Id, updated)
+			h.Row.FilesSkippedNotModified++
 			continue
 		}
 
+		if hadPrev {
+			h.Row.FilesVersioned++
+		} else {
+			h.Row.FilesNew++
+		}
 		h.Row.FilesChanged++
 		h.Row.BytesDownloaded += res.Size
 
@@ -381,6 +388,7 @@ func (r *Runner) runBackup(ctx context.Context, h *JobHandle, repo db.RepoRow) {
 			continue
 		}
 		manifestStore.MarkDeleted(fileID, now)
+		h.Row.FilesDeleted++
 		r.logInfo(h, "buried", "file_id", fileID, "path", mf.Path)
 	}
 
@@ -831,14 +839,24 @@ func (r *Runner) markCompleted(ctx context.Context, h *JobHandle) {
 	zero := 0
 	h.Row.ExitCode = &zero
 	_ = r.store.UpsertJob(ctx, h.Row)
-	r.logInfo(h, "completed", "files_seen", fmt.Sprintf("%d", h.Row.FilesSeen),
-		"files_changed", fmt.Sprintf("%d", h.Row.FilesChanged),
+	r.logInfo(h, "completed",
+		"files_seen", fmt.Sprintf("%d", h.Row.FilesSeen),
+		"files_new", fmt.Sprintf("%d", h.Row.FilesNew),
+		"files_versioned", fmt.Sprintf("%d", h.Row.FilesVersioned),
+		"files_skipped_meta", fmt.Sprintf("%d", h.Row.FilesSkippedMeta),
+		"files_skipped_not_modified", fmt.Sprintf("%d", h.Row.FilesSkippedNotModified),
+		"files_deleted", fmt.Sprintf("%d", h.Row.FilesDeleted),
 		"bytes", fmt.Sprintf("%d", h.Row.BytesDownloaded))
 	r.emitter(ctx, h.ID, "completed", map[string]any{
-		"files_seen":       h.Row.FilesSeen,
-		"files_changed":    h.Row.FilesChanged,
-		"bytes_downloaded": h.Row.BytesDownloaded,
-		"api_calls":        h.Row.APICalls,
+		"files_seen":                 h.Row.FilesSeen,
+		"files_changed":              h.Row.FilesChanged,
+		"files_new":                  h.Row.FilesNew,
+		"files_versioned":            h.Row.FilesVersioned,
+		"files_skipped_meta":         h.Row.FilesSkippedMeta,
+		"files_skipped_not_modified": h.Row.FilesSkippedNotModified,
+		"files_deleted":              h.Row.FilesDeleted,
+		"bytes_downloaded":           h.Row.BytesDownloaded,
+		"api_calls":                  h.Row.APICalls,
 	})
 	r.onChange()
 	h.Logs.Close()
