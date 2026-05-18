@@ -10,10 +10,10 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strings"
 	"syscall"
 	"time"
 
+	"github.com/Daniel-dev22/agent-kit-go/logging"
 	"github.com/gin-gonic/gin"
 
 	"github.com/Daniel-dev22/gdrive-agent/internal/config"
@@ -231,18 +231,7 @@ func newRouterClient(cfg config.Config) *http.Client {
 }
 
 func setupLogging() {
-	var level slog.Level
-	switch strings.ToLower(strings.TrimSpace(os.Getenv("LOG_LEVEL"))) {
-	case "debug":
-		level = slog.LevelDebug
-	case "warn":
-		level = slog.LevelWarn
-	case "error":
-		level = slog.LevelError
-	default:
-		level = slog.LevelInfo
-	}
-	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})))
+	logging.Setup(os.Getenv("LOG_LEVEL"))
 }
 
 func loggerMiddleware() gin.HandlerFunc {
