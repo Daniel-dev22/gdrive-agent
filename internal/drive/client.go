@@ -41,9 +41,9 @@ type SecretBundle struct {
 type ClientFactory struct {
 	httpClient *http.Client
 
-	mu       sync.Mutex
-	sources  map[string]oauth2.TokenSource // accountID → live source
-	configs  map[string]*oauth2.Config     // accountID → exchange config
+	mu      sync.Mutex
+	sources map[string]oauth2.TokenSource // accountID → live source
+	configs map[string]*oauth2.Config     // accountID → exchange config
 }
 
 // NewClientFactory wires up the shared transport. The factory does not

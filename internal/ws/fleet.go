@@ -1,13 +1,13 @@
 package ws
 
 import (
+	"log/slog"
 	"net/http"
 	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
-	"github.com/rs/zerolog/log"
 
 	"github.com/Daniel-dev22/gdrive-agent/internal/fleet"
 )
@@ -38,7 +38,7 @@ func FleetHandler(hub *fleet.Hub) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 		if err != nil {
-			log.Warn().Err(err).Msg("fleet ws upgrade")
+			slog.Warn("fleet ws upgrade", "error", err)
 			return
 		}
 		ch, unsub := hub.Subscribe()

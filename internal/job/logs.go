@@ -13,10 +13,10 @@ const LogRingSize = 500
 type LogLine struct {
 	JobID   string    `json:"job_id"`
 	Time    time.Time `json:"time"`
-	Level   string    `json:"level"`            // info|warn|error
+	Level   string    `json:"level"` // info|warn|error
 	Message string    `json:"message"`
-	Field   string    `json:"field,omitempty"`  // e.g. "files_changed"
-	Value   string    `json:"value,omitempty"`  // serialized value
+	Field   string    `json:"field,omitempty"` // e.g. "files_changed"
+	Value   string    `json:"value,omitempty"` // serialized value
 }
 
 // LogBuffer holds the ring of log lines for one job plus a set of live
@@ -27,10 +27,10 @@ type LogLine struct {
 // Slow subscribers don't block producers — a full channel buffer means
 // that subscriber's tail drops. WS layer detects the drop and reconnects.
 type LogBuffer struct {
-	mu      sync.Mutex
-	ring    []LogLine
-	closed  bool
-	subs    map[chan LogLine]struct{}
+	mu     sync.Mutex
+	ring   []LogLine
+	closed bool
+	subs   map[chan LogLine]struct{}
 }
 
 // NewLogBuffer pre-allocates the ring slice at full capacity so steady-

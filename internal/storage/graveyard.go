@@ -11,7 +11,7 @@ import (
 // Graveyard handles soft-delete + retention for files that vanished from
 // Drive. Layout:
 //
-//   <accountRoot>/graveyard/<fileID>/<iso>__<sanitizedName>
+//	<accountRoot>/graveyard/<fileID>/<iso>__<sanitizedName>
 //
 // Backup walker calls Bury() once per missing file. A periodic prune job
 // (or end-of-backup sweep) calls Sweep() with the keep-days window from

@@ -43,6 +43,7 @@ func isNativeMime(mime string) bool {
 //   - Forms → no export; return empty so caller skips
 //   - Sites → no export
 //   - Maps → no export
+//
 // Returns "" for unsupported types.
 func defaultExportMime(mime string) string {
 	switch mime {

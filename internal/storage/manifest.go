@@ -16,9 +16,9 @@ import (
 // manifest.json.bak — written by promoting the current file before each
 // rename.
 type Manifest struct {
-	AccountID  string                  `json:"account_id"`
-	UpdatedAt  time.Time               `json:"updated_at"`
-	Files      map[string]ManifestFile `json:"files"`
+	AccountID string                  `json:"account_id"`
+	UpdatedAt time.Time               `json:"updated_at"`
+	Files     map[string]ManifestFile `json:"files"`
 }
 
 // ManifestFile mirrors the schema layout from plan §F.4.3. Binary files
@@ -164,9 +164,9 @@ func (s *ManifestStore) SetAccountID(id string) {
 }
 
 // Save serializes the manifest and writes it atomically:
-//   1. Marshal current state.
-//   2. If manifest.json exists, rename it to manifest.json.bak (atomic).
-//   3. Write the new state to a sibling tmp file, fsync, rename → manifest.json.
+//  1. Marshal current state.
+//  2. If manifest.json exists, rename it to manifest.json.bak (atomic).
+//  3. Write the new state to a sibling tmp file, fsync, rename → manifest.json.
 //
 // On a crash mid-Save:
 //   - between (2) and (3): manifest.json missing, .bak holds last good copy.

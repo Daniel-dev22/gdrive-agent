@@ -5,12 +5,12 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
-	"github.com/rs/zerolog/log"
 	_ "modernc.org/sqlite" // pure-Go sqlite driver — no CGO required
 )
 
@@ -62,7 +62,7 @@ func Open(ctx context.Context, path string) (*Store, error) {
 	if err := s.migrate(ctx); err != nil {
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
-	log.Info().Str("path", path).Msg("sqlite store ready")
+	slog.Info("sqlite store ready", "path", path)
 	return s, nil
 }
 
@@ -492,7 +492,7 @@ type RepoRow struct {
 	GraveyardKeepDays  int        `json:"graveyard_keep_days"`
 	ConditionalGet     bool       `json:"conditional_get"`
 	PullDriveRevisions bool       `json:"pull_drive_revisions"`
-	FilterIncludeMime  string     `json:"filter_include_mime"` // CSV
+	FilterIncludeMime  string     `json:"filter_include_mime"`  // CSV
 	FilterExcludePaths string     `json:"filter_exclude_paths"` // CSV
 	LastBackupAt       *time.Time `json:"last_backup_at,omitempty"`
 	LastBackupJobID    string     `json:"last_backup_job_id,omitempty"`
@@ -506,35 +506,35 @@ type RepoRow struct {
 // j.state === 'running', so without snake_case keys here the UI sees
 // every state field as undefined and renders zero active jobs.
 type JobRow struct {
-	ID              string     `json:"id"`
-	RepoID          string     `json:"repo_id"`
-	AccountID       string     `json:"account_id"`
-	Action          string     `json:"action"`
-	State           string     `json:"state"`
-	StartedAt       time.Time  `json:"started_at"`
-	CompletedAt     *time.Time `json:"completed_at,omitempty"`
-	ExitCode        *int       `json:"exit_code,omitempty"`
-	Error           string     `json:"error,omitempty"`
-	FilesSeen       int        `json:"files_seen"`
+	ID          string     `json:"id"`
+	RepoID      string     `json:"repo_id"`
+	AccountID   string     `json:"account_id"`
+	Action      string     `json:"action"`
+	State       string     `json:"state"`
+	StartedAt   time.Time  `json:"started_at"`
+	CompletedAt *time.Time `json:"completed_at,omitempty"`
+	ExitCode    *int       `json:"exit_code,omitempty"`
+	Error       string     `json:"error,omitempty"`
+	FilesSeen   int        `json:"files_seen"`
 	// FilesChanged is the sum of FilesNew + FilesVersioned, kept on disk for
 	// backwards-compat with older readers and for at-a-glance "did anything
 	// happen" reporting. Backup runs set it to that sum on each persist.
 	// Restore runs use it directly as "files copied to destination".
-	FilesChanged             int `json:"files_changed"`
-	FilesNew                 int `json:"files_new"`
-	FilesVersioned           int `json:"files_versioned"`
-	FilesSkippedMeta         int `json:"files_skipped_meta"`
-	FilesSkippedNotModified  int `json:"files_skipped_not_modified"`
-	FilesDeleted             int `json:"files_deleted"`
-	BytesDownloaded int64      `json:"bytes_downloaded"`
-	APICalls        int        `json:"api_calls"`
+	FilesChanged            int   `json:"files_changed"`
+	FilesNew                int   `json:"files_new"`
+	FilesVersioned          int   `json:"files_versioned"`
+	FilesSkippedMeta        int   `json:"files_skipped_meta"`
+	FilesSkippedNotModified int   `json:"files_skipped_not_modified"`
+	FilesDeleted            int   `json:"files_deleted"`
+	BytesDownloaded         int64 `json:"bytes_downloaded"`
+	APICalls                int   `json:"api_calls"`
 	// TotalFiles is the in-scope file count known after collectFiles
 	// finishes paging Drive's files.list. Used by the UI to compute
 	// progress percent (FilesChanged/TotalFiles). Transient — not
 	// persisted to SQLite (no schema column), only ever populated on
 	// in-flight JobHandles via the runner.
-	TotalFiles      int        `json:"total_files"`
-	ScheduleID      string     `json:"schedule_id,omitempty"`
-	TriggerKey      string     `json:"trigger_key,omitempty"`
-	UpdatedAt       time.Time  `json:"updated_at"`
+	TotalFiles int       `json:"total_files"`
+	ScheduleID string    `json:"schedule_id,omitempty"`
+	TriggerKey string    `json:"trigger_key,omitempty"`
+	UpdatedAt  time.Time `json:"updated_at"`
 }

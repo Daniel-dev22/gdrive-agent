@@ -19,10 +19,9 @@ package schedules
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"path/filepath"
-
-	"github.com/rs/zerolog/log"
 
 	kitsched "github.com/Daniel-dev22/agent-kit-go/scheduler"
 
@@ -68,20 +67,19 @@ func makeGdriveFire(runner Runner) kitsched.FireFunc {
 				TriggerKey: triggerKey,
 			})
 			if err != nil {
-				log.Error().Err(err).
-					Str("schedule", sch.ID).
-					Str("name", sch.Name).
-					Str("repo", sch.RepoID).
-					Msg("gdrive schedule fire: StartBackup failed")
+				slog.Error("gdrive schedule fire: StartBackup failed",
+					"error", err,
+					"schedule", sch.ID,
+					"name", sch.Name,
+					"repo", sch.RepoID)
 				return err
 			}
-			log.Info().
-				Str("schedule", sch.ID).
-				Str("name", sch.Name).
-				Str("job", jobID).
-				Str("repo", sch.RepoID).
-				Bool("missed_recovery", missedRecovery).
-				Msg("gdrive schedule fired (backup)")
+			slog.Info("gdrive schedule fired (backup)",
+				"schedule", sch.ID,
+				"name", sch.Name,
+				"job", jobID,
+				"repo", sch.RepoID,
+				"missed_recovery", missedRecovery)
 			return nil
 
 		case "prune":
@@ -89,18 +87,14 @@ func makeGdriveFire(runner Runner) kitsched.FireFunc {
 			// constraint but the job.Runner doesn't expose StartPrune yet.
 			// Log + skip so scheduled prune rows don't crash the loop;
 			// remove this branch once Runner.StartPrune lands.
-			log.Warn().
-				Str("schedule", sch.ID).
-				Str("name", sch.Name).
-				Str("repo", sch.RepoID).
-				Msg("gdrive schedule fire: prune action not implemented in runner; skipping")
+			slog.Warn("gdrive schedule fire: prune action not implemented in runner; skipping",
+				"schedule", sch.ID,
+				"name", sch.Name,
+				"repo", sch.RepoID)
 			return nil
 
 		default:
-			log.Warn().
-				Str("schedule", sch.ID).
-				Str("action", sch.Action).
-				Msg("gdrive schedule fire: unknown action; skipping")
+			slog.Warn("gdrive schedule fire: unknown action; skipping", "schedule", sch.ID, "action", sch.Action)
 			return nil
 		}
 	}

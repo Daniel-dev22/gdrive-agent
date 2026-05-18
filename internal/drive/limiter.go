@@ -3,11 +3,11 @@ package drive
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/rs/zerolog/log"
 	"golang.org/x/sync/semaphore"
 	"golang.org/x/time/rate"
 	"google.golang.org/api/googleapi"
@@ -15,9 +15,9 @@ import (
 
 // AdaptiveLimiter gates every outbound Drive API call. Two layers:
 //
-// 1. RPS via x/time/rate.Limiter — smooth, not bursty.
-// 2. Concurrency via x/sync/semaphore.Weighted — bounds simultaneous in-flight
-//    requests so HTTP/2 multiplexing doesn't drown the connection.
+//  1. RPS via x/time/rate.Limiter — smooth, not bursty.
+//  2. Concurrency via x/sync/semaphore.Weighted — bounds simultaneous in-flight
+//     requests so HTTP/2 multiplexing doesn't drown the connection.
 //
 // On 429 (googleapi.Error.Code == 429) both ceilings halve, floor=1. A
 // background goroutine ramps both back up by 1/+1 every 60s when no 429
@@ -127,10 +127,11 @@ func (l *AdaptiveLimiter) ReportError(err error) {
 	if newRPS == l.curRPS && newConc == l.curConc {
 		return // already at floor
 	}
-	log.Warn().
-		Float64("old_rps", l.curRPS).Float64("new_rps", newRPS).
-		Int("old_conc", l.curConc).Int("new_conc", newConc).
-		Msg("adaptive limiter halving on 429")
+	slog.Warn("adaptive limiter halving on 429",
+		"old_rps", l.curRPS,
+		"new_rps", newRPS,
+		"old_conc", l.curConc,
+		"new_conc", newConc)
 	l.curRPS = newRPS
 	l.curConc = newConc
 	l.applyLocked()
@@ -181,9 +182,7 @@ func (l *AdaptiveLimiter) rampLoop(ctx context.Context) {
 				changed = true
 			}
 			if changed {
-				log.Info().
-					Float64("rps", l.curRPS).Int("conc", l.curConc).
-					Msg("adaptive limiter ramping up")
+				slog.Info("adaptive limiter ramping up", "rps", l.curRPS, "conc", l.curConc)
 				l.applyLocked()
 			}
 			l.mu.Unlock()

@@ -3,11 +3,10 @@ package config
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"strconv"
 	"strings"
-
-	"github.com/rs/zerolog/log"
 )
 
 // Config captures every operator-tunable parameter for the agent. All values
@@ -130,7 +129,8 @@ func Load() (Config, error) {
 func MustLoad() Config {
 	cfg, err := Load()
 	if err != nil {
-		log.Fatal().Err(err).Msg("config load failed")
+		slog.Error("config load failed", "error", err)
+		os.Exit(1)
 	}
 	return cfg
 }

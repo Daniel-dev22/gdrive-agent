@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
@@ -14,7 +15,6 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/rs/zerolog/log"
 
 	kitsched "github.com/Daniel-dev22/agent-kit-go/scheduler"
 
@@ -440,11 +440,11 @@ func (a *App) handleFileRevisions(c *gin.Context) {
 // with Content-Disposition: attachment. Range support inherited from
 // http.ServeFile. URL params:
 //
-//   :repo     repo_id
-//   :version  "current" | <iso>
-//   *path     remaining URL path is the FILE ID (we addressed by id because
-//             the human-readable path on Drive may contain slashes/special
-//             chars that break URL routing).
+//	:repo     repo_id
+//	:version  "current" | <iso>
+//	*path     remaining URL path is the FILE ID (we addressed by id because
+//	          the human-readable path on Drive may contain slashes/special
+//	          chars that break URL routing).
 //
 // Browser shows a real progress bar because we set Content-Length via
 // http.ServeFile.
@@ -518,9 +518,10 @@ type folderEntry struct {
 
 // handleListFolders proxies Drive's files.list filtered to folders. Query
 // params:
-//   q          — substring to search for in folder name (optional)
-//   account_id — required: which account to authenticate as
-//   parent     — optional: filter to children of this folder id
+//
+//	q          — substring to search for in folder name (optional)
+//	account_id — required: which account to authenticate as
+//	parent     — optional: filter to children of this folder id
 //
 // Returns at most 100 entries to keep the picker UI responsive.
 func (a *App) handleListFolders(c *gin.Context) {
@@ -635,20 +636,20 @@ func (a *App) EventEmitter() job.EventEmitter {
 		u := fmt.Sprintf("%s/api/gdrive/jobs/%s/event", a.Cfg.ControlCenterURL, url.PathEscape(jobID))
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, strings.NewReader(string(body)))
 		if err != nil {
-			log.Warn().Err(err).Msg("event emitter: build req")
+			slog.Warn("event emitter: build req", "error", err)
 			return
 		}
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Authorization", "Bearer "+a.Cfg.NodeToken)
 		resp, err := a.RouterClient.Do(req)
 		if err != nil {
-			log.Warn().Err(err).Str("job_id", jobID).Str("event", event).Msg("event emitter: POST failed")
+			slog.Warn("event emitter: POST failed", "error", err, "job_id", jobID, "event", event)
 			return
 		}
 		_, _ = io.Copy(io.Discard, resp.Body)
 		resp.Body.Close()
 		if resp.StatusCode >= 300 {
-			log.Warn().Int("status", resp.StatusCode).Str("job_id", jobID).Msg("event emitter: non-2xx")
+			slog.Warn("event emitter: non-2xx", "status", resp.StatusCode, "job_id", jobID)
 		}
 	}
 }
@@ -694,4 +695,3 @@ func secretsFetcher(cfg config.Config, client *http.Client, pathSegment string) 
 		return b, nil
 	}
 }
-

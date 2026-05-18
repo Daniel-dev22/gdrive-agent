@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
@@ -13,7 +14,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/rs/zerolog/log"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
 	"google.golang.org/api/drive/v3"
@@ -67,16 +67,16 @@ type Runner struct {
 	allowed  []string // restore allowlist prefixes
 	onChange func()   // callback fired on state transitions so the fleet hub coalesces a broadcast
 
-	mu          sync.RWMutex
-	jobs        map[string]*JobHandle // id → in-memory handle (logs, cancel)
-	cancels     map[string]context.CancelFunc
+	mu      sync.RWMutex
+	jobs    map[string]*JobHandle // id → in-memory handle (logs, cancel)
+	cancels map[string]context.CancelFunc
 }
 
 // JobHandle is the live state of one job — logs ring + cancellation hook.
 type JobHandle struct {
-	ID     string
-	Logs   *LogBuffer
-	Row    db.JobRow
+	ID   string
+	Logs *LogBuffer
+	Row  db.JobRow
 }
 
 // Config wires the runner up at startup.
@@ -655,9 +655,9 @@ func (w *fileWalker) descendsFrom(f *drive.File, ancestorID string) bool {
 
 // RestoreRequest is the input to StartRestore.
 type RestoreRequest struct {
-	RepoID    string
-	Version   string // ISO timestamp from _versions/, or "current"
-	FileID    string // optional — single-file restore; empty means all files at that version
+	RepoID     string
+	Version    string // ISO timestamp from _versions/, or "current"
+	FileID     string // optional — single-file restore; empty means all files at that version
 	TargetMode string // "scratch" | "custom"
 	CustomPath string // absolute path when TargetMode=custom
 	TriggerKey string
@@ -912,11 +912,11 @@ func (r *Runner) logAt(h *JobHandle, level, msg string, kv ...string) {
 	h.Logs.Append(l)
 	switch level {
 	case "warn":
-		log.Warn().Str("job_id", h.ID).Str("msg", msg).Msg("job")
+		slog.Warn("job", "job_id", h.ID, "msg", msg)
 	case "error":
-		log.Error().Str("job_id", h.ID).Str("msg", msg).Msg("job")
+		slog.Error("job", "job_id", h.ID, "msg", msg)
 	default:
-		log.Info().Str("job_id", h.ID).Str("msg", msg).Msg("job")
+		slog.Info("job", "job_id", h.ID, "msg", msg)
 	}
 }
 

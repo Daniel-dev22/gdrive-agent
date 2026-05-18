@@ -16,11 +16,11 @@ import (
 // creation; emitted with every snapshot for UI panels that show node
 // identity + sizing.
 type HostInfo struct {
-	Hostname    string `json:"hostname"`
-	NumCPU      int    `json:"num_cpu"`
-	SiteID      string `json:"site_id"`
-	NodeName    string `json:"node_name"`
-	BackupRoot  string `json:"backup_root"`
+	Hostname   string `json:"hostname"`
+	NumCPU     int    `json:"num_cpu"`
+	SiteID     string `json:"site_id"`
+	NodeName   string `json:"node_name"`
+	BackupRoot string `json:"backup_root"`
 }
 
 // Snapshot is the unit broadcast on /ws/fleet.
@@ -42,22 +42,22 @@ type Snapshot struct {
 // percent from FilesChanged/TotalFiles; renders an indeterminate bar
 // while TotalFiles is 0.
 type LiveJob struct {
-	ID                       string    `json:"id"`
-	RepoID                   string    `json:"repo_id"`
-	AccountID                string    `json:"account_id"`
-	Action                   string    `json:"action"`
-	State                    string    `json:"state"`
-	FilesSeen                int       `json:"files_seen"`
-	FilesChanged             int       `json:"files_changed"`
-	FilesNew                 int       `json:"files_new"`
-	FilesVersioned           int       `json:"files_versioned"`
-	FilesSkippedMeta         int       `json:"files_skipped_meta"`
-	FilesSkippedNotModified  int       `json:"files_skipped_not_modified"`
-	FilesDeleted             int       `json:"files_deleted"`
-	BytesDownloaded          int64     `json:"bytes_downloaded"`
-	APICalls                 int       `json:"api_calls"`
-	TotalFiles               int       `json:"total_files"`
-	StartedAt                time.Time `json:"started_at"`
+	ID                      string    `json:"id"`
+	RepoID                  string    `json:"repo_id"`
+	AccountID               string    `json:"account_id"`
+	Action                  string    `json:"action"`
+	State                   string    `json:"state"`
+	FilesSeen               int       `json:"files_seen"`
+	FilesChanged            int       `json:"files_changed"`
+	FilesNew                int       `json:"files_new"`
+	FilesVersioned          int       `json:"files_versioned"`
+	FilesSkippedMeta        int       `json:"files_skipped_meta"`
+	FilesSkippedNotModified int       `json:"files_skipped_not_modified"`
+	FilesDeleted            int       `json:"files_deleted"`
+	BytesDownloaded         int64     `json:"bytes_downloaded"`
+	APICalls                int       `json:"api_calls"`
+	TotalFiles              int       `json:"total_files"`
+	StartedAt               time.Time `json:"started_at"`
 }
 
 // Builder is the deps bundle the snapshot collector uses. The runner is
@@ -137,8 +137,8 @@ func (b *Builder) Build(ctx context.Context) (Snapshot, error) {
 type Hub struct {
 	builder *Builder
 
-	mu     sync.RWMutex
-	subs   map[chan Snapshot]struct{}
+	mu   sync.RWMutex
+	subs map[chan Snapshot]struct{}
 
 	trigger chan struct{} // buffered 1 — coalescing
 }

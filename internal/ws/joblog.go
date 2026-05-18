@@ -1,12 +1,12 @@
 package ws
 
 import (
+	"log/slog"
 	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
-	"github.com/rs/zerolog/log"
 
 	"github.com/Daniel-dev22/gdrive-agent/internal/job"
 )
@@ -42,7 +42,7 @@ func JobLogHandler(resolver JobLogResolver) gin.HandlerFunc {
 		}
 		conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 		if err != nil {
-			log.Warn().Err(err).Msg("joblog ws upgrade")
+			slog.Warn("joblog ws upgrade", "error", err)
 			return
 		}
 		snap, ch, unsub := h.Logs.Subscribe()

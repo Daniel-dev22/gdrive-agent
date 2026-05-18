@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -14,8 +15,6 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/rs/zerolog"
-	"github.com/rs/zerolog/log"
 
 	"github.com/Daniel-dev22/gdrive-agent/internal/config"
 	"github.com/Daniel-dev22/gdrive-agent/internal/db"
@@ -47,13 +46,12 @@ func main() {
 	setupLogging()
 
 	cfg := config.MustLoad()
-	log.Info().
-		Str("site", cfg.SiteID).
-		Str("node", cfg.NodeName).
-		Str("backup_root", cfg.BackupRoot).
-		Float64("max_rps", cfg.MaxRPS).
-		Int("max_concurrent", cfg.MaxConcurrent).
-		Msg("gdrive-agent starting")
+	slog.Info("gdrive-agent starting",
+		"site", cfg.SiteID,
+		"node", cfg.NodeName,
+		"backup_root", cfg.BackupRoot,
+		"max_rps", cfg.MaxRPS,
+		"max_concurrent", cfg.MaxConcurrent)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -64,7 +62,8 @@ func main() {
 	dbPath := filepath.Join(cfg.BackupRoot, ".agent", "state.db")
 	store, err := db.Open(ctx, dbPath)
 	if err != nil {
-		log.Fatal().Err(err).Msg("open sqlite")
+		slog.Error("open sqlite", "error", err)
+		os.Exit(1)
 	}
 	defer store.Close()
 
@@ -75,9 +74,9 @@ func main() {
 	// and operator clicks (Cancel, View Log) 404 because the runtime
 	// has no in-memory handle to dispatch to.
 	if n, err := store.MarkOrphanedJobsFailed(ctx); err != nil {
-		log.Warn().Err(err).Msg("orphan job sweep failed")
+		slog.Warn("orphan job sweep failed", "error", err)
 	} else if n > 0 {
-		log.Info().Int("count", n).Msg("marked orphaned jobs as failed (boot remediation)")
+		slog.Info("marked orphaned jobs as failed (boot remediation)", "count", n)
 	}
 
 	factory := drive.NewClientFactory()
@@ -139,7 +138,8 @@ func main() {
 	// catch-up runs (MissPolicy enforced by the kit).
 	sched, err := schedules.New(cfg, routerHTTP, runner)
 	if err != nil {
-		log.Fatal().Err(err).Msg("scheduler init")
+		slog.Error("scheduler init", "error", err)
+		os.Exit(1)
 	}
 	app.Scheduler = sched
 	sched.Start(ctx)
@@ -167,22 +167,23 @@ func main() {
 		// HTTP/2 transport on the read side.
 	}
 	go func() {
-		log.Info().Str("addr", cfg.ListenAddr).Msg("HTTP server listening")
+		slog.Info("HTTP server listening", "addr", cfg.ListenAddr)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatal().Err(err).Msg("HTTP server error")
+			slog.Error("HTTP server error", "error", err)
+			os.Exit(1)
 		}
 	}()
 
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
-	log.Info().Msg("shutdown signal received")
+	slog.Info("shutdown signal received")
 	cancel()
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer shutdownCancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
-		log.Error().Err(err).Msg("HTTP shutdown error")
+		slog.Error("HTTP shutdown error", "error", err)
 	}
 }
 
@@ -230,31 +231,29 @@ func newRouterClient(cfg config.Config) *http.Client {
 }
 
 func setupLogging() {
-	level := strings.ToLower(strings.TrimSpace(os.Getenv("LOG_LEVEL")))
-	zerolog.TimeFieldFormat = time.RFC3339
-	switch level {
+	var level slog.Level
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("LOG_LEVEL"))) {
 	case "debug":
-		zerolog.SetGlobalLevel(zerolog.DebugLevel)
+		level = slog.LevelDebug
 	case "warn":
-		zerolog.SetGlobalLevel(zerolog.WarnLevel)
+		level = slog.LevelWarn
 	case "error":
-		zerolog.SetGlobalLevel(zerolog.ErrorLevel)
+		level = slog.LevelError
 	default:
-		zerolog.SetGlobalLevel(zerolog.InfoLevel)
+		level = slog.LevelInfo
 	}
-	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr, TimeFormat: time.RFC3339})
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})))
 }
 
 func loggerMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		start := time.Now()
 		c.Next()
-		log.Info().
-			Str("method", c.Request.Method).
-			Str("path", c.Request.URL.Path).
-			Int("status", c.Writer.Status()).
-			Dur("dur", time.Since(start)).
-			Msg("http")
+		slog.Info("http",
+			"method", c.Request.Method,
+			"path", c.Request.URL.Path,
+			"status", c.Writer.Status(),
+			"dur", time.Since(start))
 	}
 }
 
