@@ -8,6 +8,10 @@
 # Final image is ~25MB.
 
 FROM golang:1.26 AS build
+# Target Intel Haswell+ / AMD Excavator+ for FMA/AVX2 wins. Override
+# with --build-arg GOAMD64=v1 for older CPUs. No-op for arm64 builds.
+ARG GOAMD64=v3
+ENV GOAMD64=${GOAMD64}
 WORKDIR /src
 
 # Bypass the public proxy for our private agent-kit-go module so go mod

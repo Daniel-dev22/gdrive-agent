@@ -1,6 +1,7 @@
 package router
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -10,7 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
@@ -432,7 +433,7 @@ func (a *App) handleFileRevisions(c *gin.Context) {
 		}
 		out = append(out, revisionRow{Timestamp: iso, Size: info.Size(), SanitizedName: display})
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Timestamp > out[j].Timestamp })
+	slices.SortFunc(out, func(a, b revisionRow) int { return cmp.Compare(b.Timestamp, a.Timestamp) })
 	c.JSON(http.StatusOK, gin.H{"revisions": out})
 }
 

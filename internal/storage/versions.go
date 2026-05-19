@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 )
@@ -77,7 +77,7 @@ func (v VersionLayout) Prune(fileID string, keep int) ([]string, error) {
 	}
 	// Sort ascending — the timestamp prefix sorts lexicographically because
 	// we use a zero-padded ISO-8601-like format.
-	sort.Strings(names)
+	slices.Sort(names)
 	cut := len(names) - keep
 	pruned := make([]string, 0, cut)
 	for i := 0; i < cut; i++ {
@@ -107,7 +107,7 @@ func (v VersionLayout) ListVersions(fileID string) ([]string, error) {
 			out = append(out, e.Name())
 		}
 	}
-	sort.Strings(out)
+	slices.Sort(out)
 	return out, nil
 }
 
