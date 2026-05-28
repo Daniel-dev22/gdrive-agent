@@ -5,9 +5,9 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"sync"
 	"time"
 
+	kitfleet "github.com/Daniel-dev22/agent-kit-go/fleet"
 	"github.com/Daniel-dev22/gdrive-agent/internal/db"
 	"github.com/Daniel-dev22/gdrive-agent/internal/job"
 )
@@ -130,88 +130,15 @@ func (b *Builder) Build(ctx context.Context) (Snapshot, error) {
 	}, nil
 }
 
-// Hub coalesces snapshot triggers onto a single broadcast goroutine.
-// Producers (runner state transitions, 5s tick) call Trigger(); the hub
-// builds at most one snapshot per coalescing window. Pattern mirrors
-// duplicacy-agent-api's fleetHub.
-type Hub struct {
-	builder *Builder
+// Hub is the shared agent-kit-go coalescing snapshot broadcaster, specialized
+// to this agent's Snapshot payload. The hand-rolled hub that used to live here
+// now comes from the kit so duplicacy-agent-api and gdrive-agent share ONE
+// correct implementation (guarded close, slow-consumer drop, no self-
+// unregister). See agent-kit-go/fleet.
+type Hub = kitfleet.Hub[Snapshot]
 
-	mu   sync.RWMutex
-	subs map[chan Snapshot]struct{}
-
-	trigger chan struct{} // buffered 1 — coalescing
-}
-
+// NewHub builds the fleet hub from a Builder, rebuilding every 5s for liveness
+// in addition to on-demand Trigger() calls from runner state transitions.
 func NewHub(builder *Builder) *Hub {
-	return &Hub{
-		builder: builder,
-		subs:    map[chan Snapshot]struct{}{},
-		trigger: make(chan struct{}, 1),
-	}
-}
-
-// Trigger asks the hub to compute and broadcast a fresh snapshot. Non-
-// blocking — duplicate triggers within the build window are dropped.
-func (h *Hub) Trigger() {
-	select {
-	case h.trigger <- struct{}{}:
-	default:
-	}
-}
-
-// Run is the broadcaster loop. Cancel the context to terminate.
-func (h *Hub) Run(ctx context.Context) {
-	tick := time.NewTicker(5 * time.Second)
-	defer tick.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-tick.C:
-		case <-h.trigger:
-		}
-		snap, err := h.builder.Build(ctx)
-		if err != nil {
-			continue
-		}
-		h.broadcast(snap)
-	}
-}
-
-func (h *Hub) broadcast(snap Snapshot) {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-	for c := range h.subs {
-		select {
-		case c <- snap:
-		default:
-			// Slow consumer — drop. WS layer will detect via close on
-			// disconnect, no extra cleanup needed here.
-		}
-	}
-}
-
-// Subscribe returns a channel + unsubscribe. Caller MUST call unsubscribe
-// (typically in a defer) or the hub will retain a reference.
-func (h *Hub) Subscribe() (chan Snapshot, func()) {
-	c := make(chan Snapshot, 4)
-	h.mu.Lock()
-	h.subs[c] = struct{}{}
-	h.mu.Unlock()
-	return c, func() {
-		h.mu.Lock()
-		if _, ok := h.subs[c]; ok {
-			delete(h.subs, c)
-			close(c)
-		}
-		h.mu.Unlock()
-	}
-}
-
-// SnapshotNow builds one snapshot synchronously without broadcasting. Used
-// to greet new WS subscribers so they don't have to wait up to 5s for
-// first paint.
-func (h *Hub) SnapshotNow(ctx context.Context) (Snapshot, error) {
-	return h.builder.Build(ctx)
+	return kitfleet.NewHub(builder.Build, 5*time.Second)
 }

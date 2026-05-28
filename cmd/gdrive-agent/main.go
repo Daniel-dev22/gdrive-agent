@@ -7,12 +7,14 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"syscall"
 	"time"
 
+	"github.com/Daniel-dev22/agent-kit-go/eventoutbox"
 	"github.com/Daniel-dev22/agent-kit-go/logging"
 	"github.com/gin-gonic/gin"
 
@@ -99,6 +101,28 @@ func main() {
 	}
 	app.SecretsFetcher = router.DefaultSecretsFetcher(cfg, routerHTTP)
 	app.BrowseSecretsFetcher = router.DefaultBrowseSecretsFetcher(cfg, routerHTTP)
+
+	// Durable outbound event queue (agent-kit-go). Job lifecycle events used
+	// to be pushed fire-and-forget from the EventEmitter, so a transient
+	// controller outage or an agent restart could leave a central
+	// gdrive_jobs row stuck "running". The Outbox persists each event to a
+	// pending_events table on the same SQLite handle, fires an immediate
+	// best-effort POST, and retries the backlog every 30s. It POSTs to the
+	// same /api/gdrive/jobs/:id/event endpoint with the same flat JSON body;
+	// the bearer is attached by outboxHTTP's transport-layer round-tripper so
+	// the request the router receives is identical to the old per-request one.
+	outboxHTTP := newOutboxClient(cfg, routerHTTP)
+	urlFor := func(id string) string {
+		return cfg.ControlCenterURL + "/api/gdrive/jobs/" + url.PathEscape(id) + "/event"
+	}
+	outbox, err := eventoutbox.New(store.DB, outboxHTTP, urlFor)
+	if err != nil {
+		slog.Error("eventoutbox init", "error", err)
+		os.Exit(1)
+	}
+	app.Outbox = outbox
+	outbox.Start(ctx)
+	defer outbox.Close()
 
 	// Two-phase construction: the runner's OnChange callback wants to
 	// point at hub.Trigger, but the hub's Builder wants to point at the
@@ -227,6 +251,39 @@ func newRouterClient(cfg config.Config) *http.Client {
 	return &http.Client{
 		Timeout:   30 * time.Second,
 		Transport: transport,
+	}
+}
+
+// bearerAuthRoundTripper attaches the agent's per-host bearer token to every
+// outbound request unless one is already set. Mirrors
+// duplicacy-agent-api/network.go: the event Outbox issues the POST itself (it
+// only sets Content-Type), so to keep the request the controller router
+// receives identical to the old EventEmitter (which set the Authorization
+// header per-request), auth is attached here at the transport layer.
+type bearerAuthRoundTripper struct {
+	rt    http.RoundTripper
+	token string
+}
+
+func (b *bearerAuthRoundTripper) RoundTrip(r *http.Request) (*http.Response, error) {
+	if b.token != "" && r.Header.Get("Authorization") == "" {
+		// Clone before mutating per the net/http RoundTripper contract.
+		r2 := r.Clone(r.Context())
+		r2.Header.Set("Authorization", "Bearer "+b.token)
+		return b.rt.RoundTrip(r2)
+	}
+	return b.rt.RoundTrip(r)
+}
+
+// newOutboxClient returns an HTTP client for the event Outbox that reuses the
+// router client's pooled, dial-rewritten transport (same connection pool,
+// same Traefik-rewrite behavior) and wraps it so the bearer token is attached
+// automatically. The Outbox sets only Content-Type, so without this wrapper
+// the event POST would lose the Authorization header the router requires.
+func newOutboxClient(cfg config.Config, base *http.Client) *http.Client {
+	return &http.Client{
+		Timeout:   base.Timeout,
+		Transport: &bearerAuthRoundTripper{rt: base.Transport, token: cfg.NodeToken},
 	}
 }
 
