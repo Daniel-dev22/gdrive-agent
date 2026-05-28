@@ -17,6 +17,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/Daniel-dev22/agent-kit-go/eventoutbox"
 	kitsched "github.com/Daniel-dev22/agent-kit-go/scheduler"
 
 	"github.com/Daniel-dev22/gdrive-agent/internal/config"
@@ -59,6 +60,14 @@ type App struct {
 	// RouterClient is the HTTP client used for outbound calls back to the
 	// controller router. Pooled, HTTP/2 enabled, no per-request alloc.
 	RouterClient *http.Client
+
+	// Outbox is the durable, restart-surviving queue for job lifecycle
+	// events POSTed to the controller router. Constructed in
+	// cmd/gdrive-agent/main.go and shared with the EventEmitter so a
+	// transient controller outage or an agent restart no longer drops
+	// events (the previous fire-and-forget POST did). The Outbox owns
+	// delivery + retries; EventEmitter only marshals + Enqueues.
+	Outbox *eventoutbox.Outbox
 }
 
 // RegisterRoutes mounts every endpoint listed in plan §F.2. Inbound auth
@@ -578,9 +587,12 @@ func (a *App) handleListFolders(c *gin.Context) {
 
 // ----- router event-emitter helper -----
 
-// EventEmitter returns a job.EventEmitter that POSTs lifecycle events to
-// the controller router at /api/gdrive/jobs/:id/event. Bearer-authed
-// with the agent's node token. Pooled HTTP/2 client.
+// EventEmitter returns a job.EventEmitter that enqueues lifecycle events into
+// the durable Outbox; the Outbox POSTs them to the controller router at
+// /api/gdrive/jobs/:id/event (bearer-authed at the transport layer) and retries
+// on failure so events survive a transient controller outage or an agent
+// restart. Marshaling + the FLAT wire shape are unchanged — only the delivery
+// mechanism moved from a fire-and-forget POST here to the Outbox.
 //
 // Wire shape: FLAT object matching the router's gdriveAgentEvent struct
 // (job_id, site, node, action, state, …). The router uses these fields
@@ -633,25 +645,21 @@ func (a *App) EventEmitter() job.EventEmitter {
 		for k, v := range extra {
 			flat[k] = v
 		}
-		body, _ := json.Marshal(flat)
-		u := fmt.Sprintf("%s/api/gdrive/jobs/%s/event", a.Cfg.ControlCenterURL, url.PathEscape(jobID))
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, strings.NewReader(string(body)))
+		body, err := json.Marshal(flat)
 		if err != nil {
-			slog.Warn("event emitter: build req", "error", err)
+			slog.Warn("event emitter: marshal", "error", err, "job_id", jobID, "event", event)
 			return
 		}
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Authorization", "Bearer "+a.Cfg.NodeToken)
-		resp, err := a.RouterClient.Do(req)
-		if err != nil {
-			slog.Warn("event emitter: POST failed", "error", err, "job_id", jobID, "event", event)
+		if a.Outbox == nil {
+			// Should never happen in production (wired at startup); guard so a
+			// misconfigured test build degrades to a logged drop, not a panic.
+			slog.Warn("event emitter: outbox not initialized; event dropped", "job_id", jobID, "event", event)
 			return
 		}
-		_, _ = io.Copy(io.Discard, resp.Body)
-		resp.Body.Close()
-		if resp.StatusCode >= 300 {
-			slog.Warn("event emitter: non-2xx", "status", resp.StatusCode, "job_id", jobID)
-		}
+		// The Outbox owns durability + delivery + retries from here. It POSTs
+		// the payload bytes to urlFor(jobID) with Content-Type application/json
+		// and the bearer attached at the transport layer.
+		a.Outbox.Enqueue(jobID, event, body)
 	}
 }
 

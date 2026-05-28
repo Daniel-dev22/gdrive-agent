@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Daniel-dev22/agent-kit-go/jobstore"
+
 	_ "modernc.org/sqlite" // pure-Go sqlite driver — no CGO required
 )
 
@@ -336,23 +338,45 @@ func (s *Store) DeleteRepo(ctx context.Context, id string) error {
 // forever, and operator clicks (Cancel, View Log) 404 because the
 // runtime has no in-memory handle.
 //
+// Delegates to the shared agent-kit-go jobstore helper; the SweepOptions
+// preserve the exact prior behavior (same jobs table, same running/pending
+// → failed transition, same error string, same completed_at + exit_code=1).
+//
 // Returns the number of rows remediated for logging.
 func (s *Store) MarkOrphanedJobsFailed(ctx context.Context) (int, error) {
-	now := time.Now().UTC()
-	res, err := s.DB.ExecContext(ctx, `
-		UPDATE jobs
-		   SET state        = 'failed',
-		       completed_at = ?,
-		       exit_code    = 1,
-		       error        = 'agent restarted while job was in flight',
-		       updated_at   = ?
-		 WHERE state IN ('running','pending')`,
-		now, now)
+	ids, err := jobstore.MarkOrphanedFailed(ctx, s.DB, jobstore.SweepOptions{
+		Table:           "jobs",
+		IDColumn:        "id",
+		StateColumn:     "state",
+		RunningStates:   []string{"running", "pending"},
+		FailedState:     "failed",
+		ErrorColumn:     "error",
+		ErrorMessage:    "agent restarted while job was in flight",
+		ExitCodeColumn:  "exit_code",
+		ExitCode:        1,
+		CompletedColumn: "completed_at",
+	})
 	if err != nil {
 		return 0, err
 	}
-	n, _ := res.RowsAffected()
-	return int(n), nil
+	// Preserve the prior behavior of bumping updated_at on swept rows. The
+	// kit helper sets state/error/exit_code/completed_at but has no
+	// updated_at knob, so stamp it here for exactly the rows it remediated.
+	if len(ids) > 0 {
+		now := time.Now().UTC()
+		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")
+		args := make([]any, 0, len(ids)+1)
+		args = append(args, now)
+		for _, id := range ids {
+			args = append(args, id)
+		}
+		if _, err := s.DB.ExecContext(ctx,
+			fmt.Sprintf("UPDATE jobs SET updated_at = ? WHERE id IN (%s)", placeholders),
+			args...); err != nil {
+			return len(ids), err
+		}
+	}
+	return len(ids), nil
 }
 
 // UpsertJob inserts or replaces a job row. Called from the runner on every
