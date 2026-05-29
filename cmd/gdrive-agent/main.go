@@ -15,7 +15,9 @@ import (
 	"time"
 
 	"github.com/Daniel-dev22/agent-kit-go/eventoutbox"
+	"github.com/Daniel-dev22/agent-kit-go/jobstore"
 	"github.com/Daniel-dev22/agent-kit-go/logging"
+	"github.com/Daniel-dev22/agent-kit-go/reconcile"
 	"github.com/gin-gonic/gin"
 
 	"github.com/Daniel-dev22/gdrive-agent/internal/config"
@@ -168,6 +170,28 @@ func main() {
 	app.Scheduler = sched
 	sched.Start(ctx)
 	defer sched.Stop()
+
+	// Declarative job-state reconcile: on startup + every 5 min, POST this
+	// node's full authoritative job set (non-terminal + last-24h terminals,
+	// from the local jobs table) to /api/gdrive/reconcile so the controller
+	// converges its gdrive_jobs rows. Safety net for a lost/out-of-order
+	// terminal event that would otherwise strand a row 'running'. Reuses the
+	// bearer-wrapped outbox client; stateless POST.
+	go reconcile.Run(ctx, reconcile.Config{
+		Client:   outboxHTTP,
+		URL:      cfg.ControlCenterURL + "/api/gdrive/reconcile",
+		Site:     cfg.SiteID,
+		Node:     cfg.NodeName,
+		Interval: 5 * time.Minute,
+		Snapshot: func(sctx context.Context) ([]jobstore.JobRef, error) {
+			return jobstore.ListForReconcile(sctx, store.DB, jobstore.ListOptions{
+				Table:                   "jobs",
+				ExitCodeColumn:          "exit_code",
+				RecentTerminalPredicate: "completed_at >= ?",
+				RecentTerminalArg:       time.Now().Add(-24 * time.Hour).UTC(),
+			})
+		},
+	})
 
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
