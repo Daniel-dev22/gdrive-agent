@@ -415,6 +415,40 @@ func (r *Runner) runBackup(ctx context.Context, h *JobHandle, repo db.RepoRow) {
 	}
 
 	r.markCompleted(ctx, h)
+
+	// Refresh the cached stats sidecar from the just-written mirror. These
+	// aggregates only change when a backup runs, so we compute them once here
+	// and serve them O(1) from <accountRoot>/stats.json instead of re-deriving
+	// from the manifest + crawling the disk on every UI request. Detached from
+	// the job's context (the crawl must not block job teardown / the completed
+	// event / WS) and run in its own goroutine; a race against a later job is
+	// benign — it's recomputed next run.
+	go r.refreshRepoStats(repo.AccountID, accountRoot, manifestStore.Snapshot())
+}
+
+// refreshRepoStats recomputes and persists the per-account stats sidecar. Best
+// effort: any failure is logged once and swallowed (the cache is derived data,
+// not authoritative). Wrapped in a recover so a crawl panic never takes down
+// the agent.
+func (r *Runner) refreshRepoStats(accountID, accountRoot string, manifest map[string]storage.ManifestFile) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			slog.Error("repo stats refresh panicked", "account_id", accountID, "panic", rec)
+		}
+	}()
+	stats, err := storage.ComputeRepoStats(accountID, accountRoot, manifest)
+	if err != nil {
+		slog.Warn("repo stats compute failed", "account_id", accountID, "err", err.Error())
+		return
+	}
+	if err := storage.WriteRepoStats(accountRoot, stats); err != nil {
+		slog.Warn("repo stats write failed", "account_id", accountID, "err", err.Error())
+		return
+	}
+	slog.Info("repo stats refreshed",
+		"account_id", accountID,
+		"current_files", stats.CurrentFiles,
+		"total_disk_bytes", stats.TotalDiskBytes)
 }
 
 // canSkip applies the 3-tier check (plan §F.4.3). Tier 1+2 are pure

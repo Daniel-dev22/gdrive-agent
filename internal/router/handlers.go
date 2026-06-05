@@ -90,6 +90,7 @@ func (a *App) RegisterRoutes(r *gin.Engine) {
 	auth.POST("/repos/bind", a.handleReposBind)
 	auth.GET("/repos", a.handleListRepos)
 	auth.GET("/repos/:id", a.handleGetRepo)
+	auth.GET("/repos/:id/stats", a.handleRepoStats)
 	auth.DELETE("/repos/:id", a.handleDeleteRepo)
 
 	// Cache busts + schedule nudges.
@@ -190,6 +191,33 @@ func (a *App) handleGetRepo(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, row)
+}
+
+// handleRepoStats serves the cached aggregate stats for a repo's account from
+// the stats.json sidecar, computed once at the end of each backup. 204 when no
+// backup has completed yet (no sidecar) — the UI falls back to its "no backup
+// yet" state. Stats are per-account; repos sharing an account see the same row.
+func (a *App) handleRepoStats(c *gin.Context) {
+	repo, err := a.Store.GetRepo(c.Request.Context(), c.Param("id"))
+	if err != nil {
+		if db.IsNoRows(err) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "repo not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	accountRoot := filepath.Join(a.Cfg.BackupRoot, repo.AccountID)
+	stats, ok, err := storage.ReadRepoStats(accountRoot)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if !ok {
+		c.Status(http.StatusNoContent)
+		return
+	}
+	c.JSON(http.StatusOK, stats)
 }
 
 func (a *App) handleDeleteRepo(c *gin.Context) {
