@@ -14,20 +14,20 @@ ARG GOAMD64=v3
 ENV GOAMD64=${GOAMD64}
 WORKDIR /src
 
-# Bypass the public proxy for our private agent-kit-go module so go mod
-# download hits GitHub via git+SSH. The build invocation must pass
-# `--ssh default` so the host's SSH agent is mounted only during the
-# `RUN --mount=type=ssh` below — the key never lands in the image.
-# Ansible playbook handles this.
-RUN apt-get update && apt-get install -y --no-install-recommends openssh-client && rm -rf /var/lib/apt/lists/*
+# Bypass the public proxy for our private agent-kit-go module so go mod download
+# hits GitHub via git directly (the credential helper supplies the token over
+# HTTPS). git ships in the golang image — no extra packages needed.
 ENV GOPRIVATE=github.com/Daniel-dev22/*
-RUN git config --global url."git@github.com:".insteadOf "https://github.com/" && \
-    mkdir -p /root/.ssh && \
-    ssh-keyscan -t rsa,ecdsa,ed25519 github.com >> /root/.ssh/known_hosts
 
-# Pre-download deps so the layer caches across source-only changes.
+# Fetch the private agent-kit-go module using the GitHub App token the build-agent
+# provides as the `ghtoken` secret — a credential helper reads it from the tmpfs
+# mount at fetch time so the token value never lands in .gitconfig or any layer
+# (the buildcache is pushed to the registry). required=true so a build without
+# the token fails loudly rather than silently attempting an anonymous fetch.
 COPY go.mod go.sum* ./
-RUN --mount=type=ssh go mod download
+RUN --mount=type=secret,id=ghtoken,required=true \
+    git config --global credential.helper '!f() { echo username=x-access-token; echo "password=$(cat /run/secrets/ghtoken)"; }; f' && \
+    go mod download
 
 # Source.
 COPY cmd/ ./cmd/
