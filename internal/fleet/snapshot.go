@@ -133,12 +133,14 @@ func (b *Builder) Build(ctx context.Context) (Snapshot, error) {
 // Hub is the shared agent-kit-go coalescing snapshot broadcaster, specialized
 // to this agent's Snapshot payload. The hand-rolled hub that used to live here
 // now comes from the kit so duplicacy-agent-api and gdrive-agent share ONE
-// correct implementation (guarded close, slow-consumer drop, no self-
-// unregister). See agent-kit-go/fleet.
+// correct implementation (guarded close, conflating latest-wins delivery, no
+// self-unregister). See agent-kit-go/fleet.
 type Hub = kitfleet.Hub[Snapshot]
 
-// NewHub builds the fleet hub from a Builder, rebuilding every 5s for liveness
-// in addition to on-demand Trigger() calls from runner state transitions.
+// NewHub builds the fleet hub from a Builder. Snapshots fan out on each runner
+// state transition via Trigger(); kit's conflating delivery never drops the
+// latest frame, so the periodic rebuild is just liveness insurance. Both agents
+// use the shared kitfleet.DefaultLivenessTick so their cadence can't drift.
 func NewHub(builder *Builder) *Hub {
-	return kitfleet.NewHub(builder.Build, 5*time.Second)
+	return kitfleet.NewHub(builder.Build, kitfleet.DefaultLivenessTick)
 }
