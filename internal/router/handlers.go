@@ -19,13 +19,14 @@ import (
 
 	"github.com/Daniel-dev22/agent-kit-go/eventoutbox"
 	kitsched "github.com/Daniel-dev22/agent-kit-go/scheduler"
+	"github.com/Daniel-dev22/agent-kit-go/storage"
 
 	"github.com/Daniel-dev22/gdrive-agent/internal/config"
 	"github.com/Daniel-dev22/gdrive-agent/internal/db"
 	"github.com/Daniel-dev22/gdrive-agent/internal/drive"
+	"github.com/Daniel-dev22/gdrive-agent/internal/drivestore"
 	"github.com/Daniel-dev22/gdrive-agent/internal/fleet"
 	"github.com/Daniel-dev22/gdrive-agent/internal/job"
-	"github.com/Daniel-dev22/gdrive-agent/internal/storage"
 )
 
 // App bundles every component the HTTP handlers need. One App per agent
@@ -208,7 +209,7 @@ func (a *App) handleRepoStats(c *gin.Context) {
 		return
 	}
 	accountRoot := filepath.Join(a.Cfg.BackupRoot, repo.AccountID)
-	stats, ok, err := storage.ReadRepoStats(accountRoot)
+	stats, ok, err := drivestore.ReadRepoStats(accountRoot)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return

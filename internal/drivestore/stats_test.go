@@ -1,10 +1,12 @@
-package storage
+package drivestore
 
 import (
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/Daniel-dev22/agent-kit-go/storage"
 )
 
 // writeFile creates a file with `size` bytes of zeroes under accountRoot,
@@ -41,7 +43,7 @@ func TestComputeRepoStats(t *testing.T) {
 	writeFile(t, root, 15, "_drive_revisions", "fid1", "rev2")
 
 	deletedAt := time.Now().UTC()
-	manifest := map[string]ManifestFile{
+	manifest := map[string]storage.ManifestFile{
 		"fid1": {Path: "a.txt", Size: 100, VersionCount: 2},
 		"fid2": {Path: "sub/b.txt", Size: 200, VersionCount: 1},
 		// Soft-deleted entry: excluded from current counts/bytes.
@@ -87,7 +89,7 @@ func TestComputeRepoStats(t *testing.T) {
 func TestComputeRepoStatsEmptyAccount(t *testing.T) {
 	// A fresh account with no on-disk buckets at all must not error.
 	root := t.TempDir()
-	s, err := ComputeRepoStats("acct-empty", root, map[string]ManifestFile{})
+	s, err := ComputeRepoStats("acct-empty", root, map[string]storage.ManifestFile{})
 	if err != nil {
 		t.Fatalf("ComputeRepoStats on empty account: %v", err)
 	}
