@@ -2,15 +2,8 @@ module github.com/Daniel-dev22/gdrive-agent
 
 go 1.26
 
-// TEMPORARY dev wiring for the lockstep kit migration (transport/storage/synckit
-// promoted from gdrive on agent-kit-go branch feat/filemesh-shared). The require
-// below is kept pinned; this replace overrides it with the local branch source so
-// go build/test resolve the new packages from the sibling checkout. A real kit tag
-// + `go get github.com/Daniel-dev22/agent-kit-go@<tag>` repin replaces this at deploy.
-replace github.com/Daniel-dev22/agent-kit-go => ../agent-kit-go
-
 require (
-	github.com/Daniel-dev22/agent-kit-go v0.1.11
+	github.com/Daniel-dev22/agent-kit-go v0.2.0
 	github.com/gin-gonic/gin v1.10.0
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
