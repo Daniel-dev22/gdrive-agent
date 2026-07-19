@@ -5,7 +5,6 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -18,6 +17,7 @@ import (
 	"github.com/Daniel-dev22/agent-kit-go/jobstore"
 	"github.com/Daniel-dev22/agent-kit-go/logging"
 	"github.com/Daniel-dev22/agent-kit-go/reconcile"
+	"github.com/Daniel-dev22/agent-kit-go/transport"
 	"github.com/gin-gonic/gin"
 
 	"github.com/Daniel-dev22/gdrive-agent/internal/config"
@@ -92,8 +92,15 @@ func main() {
 	// local docker Traefik can match its routing rule; when TRAEFIK_DOCKER_DNS
 	// is set the dial target is rewritten to that container so we never have
 	// to depend on the host's DNS resolving the public hostname correctly.
-	// Mirrors duplicacy-agent-api/network.go:buildControlCenterClient.
-	routerHTTP := newRouterClient(cfg)
+	// Shared with duplicacy-agent-api via agent-kit-go/transport (canonical
+	// pool knobs were taken from gdrive: KeepAlive 30s, IdleConnTimeout 90s,
+	// ForceAttemptHTTP2, dial 5s, MaxIdleConns 20, per-host 10, client 30s).
+	// No bearer here — the plain router client; the event Outbox client below
+	// wraps this transport to add the bearer.
+	routerHTTP := transport.NewRouterClient(transport.RouterClientConfig{
+		TraefikDockerDNS: cfg.TraefikDockerDNS,
+		TraefikDialPort:  cfg.TraefikDialPort,
+	})
 
 	app := &router.App{
 		Cfg:          cfg,
@@ -113,7 +120,14 @@ func main() {
 	// same /api/gdrive/jobs/:id/event endpoint with the same flat JSON body;
 	// the bearer is attached by outboxHTTP's transport-layer round-tripper so
 	// the request the router receives is identical to the old per-request one.
-	outboxHTTP := newOutboxClient(cfg, routerHTTP)
+	// The Outbox client reuses routerHTTP's pooled, dial-rewritten transport
+	// (same connection pool + Traefik behavior) wrapped in the shared bearer
+	// round-tripper from agent-kit-go/transport, and the same Timeout — this is
+	// byte-for-byte the old local newOutboxClient/bearerAuthRoundTripper pair.
+	outboxHTTP := &http.Client{
+		Timeout:   routerHTTP.Timeout,
+		Transport: transport.NewBearerRoundTripper(routerHTTP.Transport, cfg.NodeToken),
+	}
 	urlFor := func(id string) string {
 		return cfg.ControlCenterURL + "/api/gdrive/jobs/" + url.PathEscape(id) + "/event"
 	}
@@ -232,82 +246,6 @@ func main() {
 	defer shutdownCancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		slog.Error("HTTP shutdown error", "error", err)
-	}
-}
-
-// newRouterClient builds the pooled HTTP client used for /api/* calls back
-// to the controller router. Two operating modes — same shape as
-// duplicacy-agent-api/network.go:buildControlCenterClient:
-//
-//   - **Direct mode** (cfg.TraefikDockerDNS == ""): the URL host is dialed
-//     normally. Used when the agent can resolve the public hostname itself
-//     (e.g. tests, k3s-node hosts dialing cluster DNS).
-//
-//   - **Traefik-rewrite mode** (cfg.TraefikDockerDNS != ""): DialContext
-//     ignores the URL's host:port and dials <TraefikDockerDNS>:<TraefikDialPort>
-//     instead — the local docker Traefik container, resolved via the docker
-//     network's embedded DNS. The HTTP Host header and TLS SNI stay as the
-//     URL host (e.g. "controller-api.example.com:1443") so Traefik
-//     matches the inbound rule and forwards into the cluster over its
-//     site-specific mTLS ServersTransport.
-func newRouterClient(cfg config.Config) *http.Client {
-	dialer := &net.Dialer{
-		Timeout:   5 * time.Second,
-		KeepAlive: 30 * time.Second,
-	}
-
-	transport := &http.Transport{
-		ForceAttemptHTTP2:   true,
-		MaxIdleConns:        20,
-		MaxIdleConnsPerHost: 10,
-		IdleConnTimeout:     90 * time.Second,
-	}
-
-	if cfg.TraefikDockerDNS != "" {
-		traefikTarget := net.JoinHostPort(cfg.TraefikDockerDNS, cfg.TraefikDialPort)
-		transport.DialContext = func(ctx context.Context, network, _ string) (net.Conn, error) {
-			return dialer.DialContext(ctx, network, traefikTarget)
-		}
-	} else {
-		transport.DialContext = dialer.DialContext
-	}
-
-	return &http.Client{
-		Timeout:   30 * time.Second,
-		Transport: transport,
-	}
-}
-
-// bearerAuthRoundTripper attaches the agent's per-host bearer token to every
-// outbound request unless one is already set. Mirrors
-// duplicacy-agent-api/network.go: the event Outbox issues the POST itself (it
-// only sets Content-Type), so to keep the request the controller router
-// receives identical to the old EventEmitter (which set the Authorization
-// header per-request), auth is attached here at the transport layer.
-type bearerAuthRoundTripper struct {
-	rt    http.RoundTripper
-	token string
-}
-
-func (b *bearerAuthRoundTripper) RoundTrip(r *http.Request) (*http.Response, error) {
-	if b.token != "" && r.Header.Get("Authorization") == "" {
-		// Clone before mutating per the net/http RoundTripper contract.
-		r2 := r.Clone(r.Context())
-		r2.Header.Set("Authorization", "Bearer "+b.token)
-		return b.rt.RoundTrip(r2)
-	}
-	return b.rt.RoundTrip(r)
-}
-
-// newOutboxClient returns an HTTP client for the event Outbox that reuses the
-// router client's pooled, dial-rewritten transport (same connection pool,
-// same Traefik-rewrite behavior) and wraps it so the bearer token is attached
-// automatically. The Outbox sets only Content-Type, so without this wrapper
-// the event POST would lose the Authorization header the router requires.
-func newOutboxClient(cfg config.Config, base *http.Client) *http.Client {
-	return &http.Client{
-		Timeout:   base.Timeout,
-		Transport: &bearerAuthRoundTripper{rt: base.Transport, token: cfg.NodeToken},
 	}
 }
 

@@ -1,4 +1,4 @@
-package storage
+package drivestore
 
 import (
 	"encoding/json"
@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/Daniel-dev22/agent-kit-go/storage"
 )
 
 // statsFileName is the per-account stats sidecar, written next to manifest.json
@@ -52,7 +54,7 @@ type RepoStats struct {
 // <BACKUP_ROOT>/<account_id>. Missing bucket dirs are treated as empty (a fresh
 // account that has never had versions/graveyard/revisions). The crawl skips
 // directory entries and only sums regular files.
-func ComputeRepoStats(accountID, accountRoot string, manifest map[string]ManifestFile) (RepoStats, error) {
+func ComputeRepoStats(accountID, accountRoot string, manifest map[string]storage.ManifestFile) (RepoStats, error) {
 	s := RepoStats{AccountID: accountID, ComputedAt: time.Now().UTC()}
 
 	for _, mf := range manifest {
@@ -127,7 +129,7 @@ func WriteRepoStats(accountRoot string, s RepoStats) error {
 	if err != nil {
 		return fmt.Errorf("marshal repo stats: %w", err)
 	}
-	return AtomicWriteJSON(filepath.Join(accountRoot, statsFileName), payload)
+	return storage.AtomicWriteJSON(filepath.Join(accountRoot, statsFileName), payload)
 }
 
 // ReadRepoStats loads the cached stats for an account. ok is false (with no

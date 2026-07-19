@@ -18,9 +18,11 @@ import (
 	"golang.org/x/oauth2/google"
 	"google.golang.org/api/drive/v3"
 
+	"github.com/Daniel-dev22/agent-kit-go/storage"
+
 	"github.com/Daniel-dev22/gdrive-agent/internal/db"
 	gdrive "github.com/Daniel-dev22/gdrive-agent/internal/drive"
-	"github.com/Daniel-dev22/gdrive-agent/internal/storage"
+	"github.com/Daniel-dev22/gdrive-agent/internal/drivestore"
 )
 
 // Action enumerates the supported job actions.
@@ -274,7 +276,7 @@ func (r *Runner) runBackup(ctx context.Context, h *JobHandle, repo db.RepoRow) {
 			r.markCancelled(ctx, h)
 			return
 		}
-		res, notMod, dlErr := storage.StreamDownload(ctx, storage.DownloadReq{
+		res, notMod, dlErr := drivestore.StreamDownload(ctx, drivestore.DownloadReq{
 			URL:             downloadURL,
 			AuthHeader:      authHeader,
 			IfModifiedSince: ifModSince,
@@ -287,15 +289,15 @@ func (r *Runner) runBackup(ctx context.Context, h *JobHandle, repo db.RepoRow) {
 
 		if dlErr != nil {
 			r.limiter.ReportError(dlErr)
-			// Single retry on md5 mismatch (storage.ErrMD5Mismatch).
-			if errors.Is(dlErr, storage.ErrMD5Mismatch) {
+			// Single retry on md5 mismatch (drivestore.ErrMD5Mismatch).
+			if errors.Is(dlErr, drivestore.ErrMD5Mismatch) {
 				r.logWarn(h, "md5 mismatch, retrying", "file_id", file.Id)
 				release2, lerr := r.limiter.Wait(ctx)
 				if lerr != nil {
 					r.markCancelled(ctx, h)
 					return
 				}
-				res, notMod, dlErr = storage.StreamDownload(ctx, storage.DownloadReq{
+				res, notMod, dlErr = drivestore.StreamDownload(ctx, drivestore.DownloadReq{
 					URL:             downloadURL,
 					AuthHeader:      authHeader,
 					IfModifiedSince: ifModSince,
@@ -436,12 +438,12 @@ func (r *Runner) refreshRepoStats(accountID, accountRoot string, manifest map[st
 			slog.Error("repo stats refresh panicked", "account_id", accountID, "panic", rec)
 		}
 	}()
-	stats, err := storage.ComputeRepoStats(accountID, accountRoot, manifest)
+	stats, err := drivestore.ComputeRepoStats(accountID, accountRoot, manifest)
 	if err != nil {
 		slog.Warn("repo stats compute failed", "account_id", accountID, "err", err.Error())
 		return
 	}
-	if err := storage.WriteRepoStats(accountRoot, stats); err != nil {
+	if err := drivestore.WriteRepoStats(accountRoot, stats); err != nil {
 		slog.Warn("repo stats write failed", "account_id", accountID, "err", err.Error())
 		return
 	}
@@ -539,7 +541,7 @@ func (r *Runner) pullRevisions(ctx context.Context, svc *drive.Service, h *JobHa
 			if lerr != nil {
 				return
 			}
-			_, _, derr := storage.StreamDownload(ctx, storage.DownloadReq{
+			_, _, derr := drivestore.StreamDownload(ctx, drivestore.DownloadReq{
 				URL:         urlStr,
 				AuthHeader:  authHeader,
 				DestPath:    revDest,

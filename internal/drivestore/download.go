@@ -1,4 +1,21 @@
-package storage
+// Package drivestore holds the Drive-specific on-disk pieces that did NOT
+// generalize into the shared agent-kit-go/storage toolbox: the resumable,
+// md5-verified Drive media download (StreamDownload) and the per-account mirror
+// stats sidecar (stats.go). Everything transport-neutral — AtomicWriteJSON,
+// MoveAtomic, ManifestStore, VersionLayout, Graveyard, SanitizeName/Path, plus
+// the new CopyToFileAtomic/ChunkStage — now lives in
+// github.com/Daniel-dev22/agent-kit-go/storage and is consumed from there.
+//
+// StreamDownload is intentionally NOT re-expressed on top of the kit's
+// CopyToFileAtomic. CopyToFileAtomic opens its .part with O_TRUNC and removes
+// it on ANY error, whereas StreamDownload's byte-range resume relies on the
+// .part surviving a mid-stream failure so the NEXT run can re-`Range` from
+// where it stopped (see the resumeAt logic below). Routing the copy core
+// through CopyToFileAtomic would silently break resume for large interrupted
+// downloads, so the transport-neutral core stays inlined here to preserve exact
+// production behavior. (See migration report: the StreamDownload refactor onto
+// CopyToFileAtomic was deferred on behavioral-parity grounds.)
+package drivestore
 
 import (
 	"context"
@@ -228,42 +245,3 @@ func StreamDownload(ctx context.Context, req DownloadReq) (DownloadResult, bool,
 // ErrMD5Mismatch is returned (wrapped) when an in-band md5 disagrees with
 // Drive's md5Checksum. Caller pattern: errors.Is(err, ErrMD5Mismatch).
 var ErrMD5Mismatch = errors.New("md5 mismatch")
-
-// AtomicWriteJSON writes payload to dst via tmp+rename, with fsync. Used by
-// the manifest writer.
-func AtomicWriteJSON(dst string, payload []byte) error {
-	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-		return err
-	}
-	tmp, err := os.CreateTemp(filepath.Dir(dst), filepath.Base(dst)+".tmp.*")
-	if err != nil {
-		return err
-	}
-	tmpPath := tmp.Name()
-	defer func() {
-		// Best-effort cleanup if we bail before Rename.
-		_ = os.Remove(tmpPath)
-	}()
-	if _, err := tmp.Write(payload); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmpPath, dst)
-}
-
-// MoveAtomic renames src → dst, creating dst's parent dir if needed.
-// Used by versions.go to rotate live files into _versions/ and by
-// graveyard.go to move soft-deleted files out of the live tree.
-func MoveAtomic(src, dst string) error {
-	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-		return err
-	}
-	return os.Rename(src, dst)
-}
