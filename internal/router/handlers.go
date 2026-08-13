@@ -40,15 +40,15 @@ type App struct {
 
 	// Scheduler is the per-host cron scheduler from agent-kit-go. Pulled
 	// from <CONTROL_CENTER_URL>/api/gdrive/schedules?node=<self>, cached
-	// to disk, and ticked locally — controller scheduler-api + EDA
-	// are NOT in the firing path (mirrors duplicacy-agent).
+	// to disk, and ticked locally — the controller is NOT in the firing
+	// path, so a controller outage cannot make this host miss a window.
 	Scheduler *kitsched.Scheduler
 
 	// SecretsFetcher returns the per-account credentials bundle for JOB
-	// execution. In production this calls the router's
+	// execution. In production this calls the controller's
 	// /api/gdrive/accounts/:id/secrets-for-node/:node endpoint over the mTLS
-	// tunnel; the router checks for an existing repo binding before vending.
-	// For tests it can return a static bundle.
+	// tunnel; the controller checks for an existing repo binding before
+	// vending. For tests it can return a static bundle.
 	SecretsFetcher func(ctx context.Context, accountID string) (drive.SecretBundle, error)
 
 	// BrowseSecretsFetcher returns the per-account credentials bundle for
@@ -59,11 +59,11 @@ type App struct {
 	BrowseSecretsFetcher func(ctx context.Context, accountID string) (drive.SecretBundle, error)
 
 	// RouterClient is the HTTP client used for outbound calls back to the
-	// controller router. Pooled, HTTP/2 enabled, no per-request alloc.
+	// controller. Pooled, HTTP/2 enabled, no per-request alloc.
 	RouterClient *http.Client
 
 	// Outbox is the durable, restart-surviving queue for job lifecycle
-	// events POSTed to the controller router. Constructed in
+	// events POSTed to the controller. Constructed in
 	// cmd/gdrive-agent/main.go and shared with the EventEmitter so a
 	// transient controller outage or an agent restart no longer drops
 	// events (the previous fire-and-forget POST did). The Outbox owns
@@ -71,10 +71,14 @@ type App struct {
 	Outbox *eventoutbox.Outbox
 }
 
-// RegisterRoutes mounts every endpoint listed in plan §F.2. Inbound auth
-// terminates at the mTLS tunnel (per-site client cert verified by the host
-// Traefik); application-layer bearer auth is reserved for the reverse
-// direction (agent → controller calls in handleSecrets / outbound code).
+// RegisterRoutes mounts the agent's whole HTTP surface.
+//
+// SECURITY: none of these routes is authenticated. The `auth` group below is
+// a bare gin group with NO middleware — the name is historical. The agent
+// assumes an mTLS-terminating reverse proxy in front of it does the
+// authentication; the bearer token it holds is used only in the OUTBOUND
+// direction (agent → controller, see secretsFetcher). Anything that can
+// reach this listener can read every mirrored file and start jobs.
 func (a *App) RegisterRoutes(r *gin.Engine) {
 	// Health endpoints — no auth. HEAD aliases registered because container
 	// healthcheck tools (`wget --spider`, `curl -I`) issue HEAD; gin doesn't
@@ -84,6 +88,7 @@ func (a *App) RegisterRoutes(r *gin.Engine) {
 	r.GET("/health/ready", a.handleReady)
 	r.HEAD("/health/ready", a.handleReady)
 
+	// NOTE: no middleware — see the SECURITY note above.
 	auth := r.Group("/")
 
 	// Repo lifecycle.
@@ -123,9 +128,9 @@ func (a *App) handleLive(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "live"})
 }
 
-// handleReady reports ready iff the DB is reachable. The router test by
-// performing an actual SQLite ping; if the disk fell off we want the load
-// balancer to know.
+// handleReady reports ready iff the DB is reachable. It performs an actual
+// SQLite ping rather than returning a constant — if the backing disk fell
+// away we want whatever fronts this agent to know.
 func (a *App) handleReady(c *gin.Context) {
 	if err := a.Store.DB.PingContext(c.Request.Context()); err != nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"status": "not_ready", "error": err.Error()})
@@ -267,8 +272,8 @@ func (a *App) handleInvalidateCredential(c *gin.Context) {
 
 // handleSchedulesRefresh forces an early reconcile pull from
 // <CONTROL_CENTER_URL>/api/gdrive/schedules?node=<self>. Used by the
-// controller router after a CRUD write so the agent doesn't have
-// to wait for the 5-min reconcile tick.
+// controller after a schedule write so the agent doesn't have to wait
+// for the 5-min reconcile tick.
 func (a *App) handleSchedulesRefresh(c *gin.Context) {
 	if a.Scheduler == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "scheduler not initialized"})
@@ -475,9 +480,10 @@ func (a *App) handleFileRevisions(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"revisions": out})
 }
 
-// handleStreamFile streams one file version to the caller (router → browser)
-// with Content-Disposition: attachment. Range support inherited from
-// http.ServeFile. URL params:
+// handleStreamFile streams one file version to the caller with
+// Content-Disposition: attachment. Range support inherited from
+// http.ServeFile. This route is UNAUTHENTICATED like every other one — see
+// the SECURITY note on RegisterRoutes. URL params:
 //
 //	:repo     repo_id
 //	:version  "current" | <iso>
@@ -608,29 +614,27 @@ func (a *App) handleListFolders(c *gin.Context) {
 	for _, f := range resp.Files {
 		out = append(out, folderEntry{ID: f.Id, Name: f.Name})
 	}
-	// Wrap in {folders: [...]} — the frontend's gdrive-api.ts client expects
-	// `r.folders` (mirrors the duplicacy picker's shape). Returning a bare
-	// array makes `.map` crash on `undefined` in RepoForm.
+	// Wrap in {folders: [...]} rather than returning a bare array — the
+	// wrapper leaves room for pagination fields later without breaking
+	// clients that already destructure `.folders`.
 	c.JSON(http.StatusOK, gin.H{"folders": out})
 }
 
 // ----- router event-emitter helper -----
 
 // EventEmitter returns a job.EventEmitter that enqueues lifecycle events into
-// the durable Outbox; the Outbox POSTs them to the controller router at
-// /api/gdrive/jobs/:id/event (bearer-authed at the transport layer) and retries
-// on failure so events survive a transient controller outage or an agent
-// restart. Marshaling + the FLAT wire shape are unchanged — only the delivery
-// mechanism moved from a fire-and-forget POST here to the Outbox.
+// the durable Outbox; the Outbox POSTs them to the controller at
+// /api/gdrive/jobs/:id/event (bearer attached at the transport layer) and
+// retries on failure so events survive a transient controller outage or an
+// agent restart.
 //
-// Wire shape: FLAT object matching the router's gdriveAgentEvent struct
-// (job_id, site, node, action, state, …). The router uses these fields
-// to UPSERT into gdrive_jobs — it rejects (HTTP 400) any envelope that
-// doesn't carry job_id at the top level, so wrapping the payload in a
-// nested {event, emitted_at, payload} envelope (the old shape) silently
-// dropped every event with no row written. The agent looks the live
-// JobHandle up via Runner.Job() to fill in the metadata the runner
-// callback's narrow signature doesn't pass through.
+// Wire shape: a FLAT object (job_id, site, node, action, state, …). The
+// controller upserts its own job row from these fields and requires job_id at
+// the TOP level — wrapping the payload in a nested
+// {event, emitted_at, payload} envelope silently drops every event with no row
+// written, which is exactly what an earlier version of this did. The agent
+// looks the live JobHandle up via Runner.Job() to fill in the metadata the
+// runner callback's narrow signature doesn't pass through.
 func (a *App) EventEmitter() job.EventEmitter {
 	return func(ctx context.Context, jobID string, event string, extra map[string]any) {
 		flat := map[string]any{
@@ -693,7 +697,7 @@ func (a *App) EventEmitter() job.EventEmitter {
 }
 
 // DefaultSecretsFetcher returns a SecretsFetcher for the job-run path
-// (router enforces a repo binding before vending).
+// (the controller enforces a repo binding before vending).
 func DefaultSecretsFetcher(cfg config.Config, client *http.Client) func(ctx context.Context, accountID string) (drive.SecretBundle, error) {
 	return secretsFetcher(cfg, client, "secrets-for-node")
 }
@@ -706,8 +710,9 @@ func DefaultBrowseSecretsFetcher(cfg config.Config, client *http.Client) func(ct
 }
 
 // secretsFetcher is the shared implementation behind DefaultSecretsFetcher
-// and DefaultBrowseSecretsFetcher. The two paths return identical bundles —
-// only the router-side authorization predicate differs.
+// and DefaultBrowseSecretsFetcher, and the one place the OUTBOUND bearer is
+// attached. The two paths return identical bundles — only the
+// controller-side authorization predicate differs.
 func secretsFetcher(cfg config.Config, client *http.Client, pathSegment string) func(ctx context.Context, accountID string) (drive.SecretBundle, error) {
 	return func(ctx context.Context, accountID string) (drive.SecretBundle, error) {
 		u := fmt.Sprintf("%s/api/gdrive/accounts/%s/%s/%s",

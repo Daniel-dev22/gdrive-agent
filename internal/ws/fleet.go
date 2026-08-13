@@ -12,20 +12,25 @@ import (
 	"github.com/Daniel-dev22/gdrive-agent/internal/fleet"
 )
 
-// upgrader is shared across both /ws/* handlers. CheckOrigin returns true
-// because inbound auth terminates at the mTLS tunnel before requests reach
-// the agent — origin spoofing isn't a meaningful additional surface.
+// upgrader is shared across both /ws/* handlers.
+//
+// SECURITY: CheckOrigin returns true, i.e. ANY origin may open these
+// sockets. That is only safe because the agent is meant to sit behind an
+// mTLS-terminating reverse proxy that authenticates before anything reaches
+// this process. Exposing the listener directly makes both feeds
+// world-readable from any web page. See README.md.
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  4096,
 	WriteBufferSize: 4096,
 	CheckOrigin:     func(r *http.Request) bool { return true },
 }
 
-// snapshotEnvelope is the wire shape the frontend's useFleet hook expects:
-// {"type":"snapshot","data":<snap>}. Mirrors duplicacy-agent-api's
-// fleetEvent — same hook consumes both backends, so the wrapper has to match
-// or the frontend silently drops the frame (which manifests as the panel
-// showing "unreachable" even though the WS is connected).
+// snapshotEnvelope is the wire shape every frame is wrapped in:
+// {"type":"snapshot","data":<snap>}. It is deliberately identical to
+// duplicacy-agent-api's, so one client can consume both agents' feeds. A
+// consumer that exact-matches on `type` silently DROPS an unrecognised
+// frame, which shows up as a panel stuck on "unreachable" while the socket
+// is in fact connected — so renaming this is a hard break, not a rename.
 type snapshotEnvelope struct {
 	Type string          `json:"type"`
 	Data *fleet.Snapshot `json:"data"`

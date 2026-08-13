@@ -24,12 +24,13 @@ import (
 //
 // The agent uses this DB for:
 //   - jobs table: every backup/restore run with its state machine
-//   - repos table: account_id + folder_id bindings agent learned from /repos/init
-//   - schedules cache: pulled from router on /schedules/refresh
+//   - repos table: account_id + folder_id bindings learned from /repos/init
+//   - pending_events table: the durable outbound event queue, created and
+//     owned by agent-kit-go/eventoutbox on this same handle
 //
-// Manifest files (per-account, on disk) are NOT in this DB — they live next
-// to the data they describe. SQLite is reserved for ops the agent's HTTP
-// endpoints serve to the router/UI.
+// Two things deliberately live elsewhere: the per-account manifests (on disk,
+// next to the data they describe) and the schedule cache (a JSON file written
+// by agent-kit-go/scheduler at <BACKUP_ROOT>/.agent/schedules.json).
 type Store struct {
 	DB *sql.DB
 }
@@ -119,20 +120,6 @@ func (s *Store) migrate(ctx context.Context) error {
 			updated_at TIMESTAMP NOT NULL
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_repos_account ON repos(account_id)`,
-
-		// schedules cache — agent re-pulls from router on /schedules/refresh
-		`CREATE TABLE IF NOT EXISTS schedules (
-			id TEXT PRIMARY KEY,
-			repo_id TEXT NOT NULL,
-			action TEXT NOT NULL,
-			schedule_json TEXT NOT NULL,
-			miss_policy TEXT,
-			enabled INTEGER NOT NULL DEFAULT 1,
-			params_json TEXT,
-			version INTEGER NOT NULL DEFAULT 1,
-			refreshed_at TIMESTAMP NOT NULL
-		)`,
-		`CREATE INDEX IF NOT EXISTS idx_schedules_repo ON schedules(repo_id)`,
 	}
 	for _, q := range stmts {
 		if _, err := s.DB.ExecContext(ctx, q); err != nil {
@@ -502,10 +489,10 @@ func boolToInt(b bool) int {
 	return 0
 }
 
-// RepoRow is the SQLite row shape for repos. JSON tags match the wire
-// shape the controller frontend's Repo interface expects
-// (gdrive-api.ts) so /repos, /ws/fleet, and /api/gdrive/<node>/* return
-// snake_case keys the UI can consume without an extra mapping layer.
+// RepoRow is the SQLite row shape for repos. The snake_case JSON tags are
+// the wire contract: /repos, /ws/fleet and everything the controller proxies
+// through to a UI read these keys directly, with no mapping layer in
+// between — so renaming one is a breaking change, not a refactor.
 type RepoRow struct {
 	ID                 string     `json:"id"`
 	AccountID          string     `json:"account_id"`
@@ -524,11 +511,10 @@ type RepoRow struct {
 	UpdatedAt          time.Time  `json:"updated_at"`
 }
 
-// JobRow is the SQLite row shape for jobs. JSON tags match the wire
-// shape the controller frontend's Job interface expects
-// (gdrive-api.ts) — the useGdriveFleet hook filters activeJobs by
-// j.state === 'running', so without snake_case keys here the UI sees
-// every state field as undefined and renders zero active jobs.
+// JobRow is the SQLite row shape for jobs. As with RepoRow the snake_case
+// JSON tags are the wire contract — a consumer filtering live jobs on
+// `state == "running"` sees every field as undefined if these are renamed,
+// which reads as "nothing is running" rather than as an error.
 type JobRow struct {
 	ID          string     `json:"id"`
 	RepoID      string     `json:"repo_id"`

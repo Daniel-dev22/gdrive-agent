@@ -61,8 +61,8 @@ func TestComputeRepoStats(t *testing.T) {
 		want int64
 	}{
 		{"CurrentFiles", int64(s.CurrentFiles), 2},
-		{"CurrentBytes", s.CurrentBytes, 300},   // 100 + 200 (fid3 excluded)
-		{"FilesWithRev", int64(s.FilesWithRev), 2}, // fid1, fid2 (fid3 deleted)
+		{"CurrentBytes", s.CurrentBytes, 300},          // 100 + 200 (fid3 excluded)
+		{"FilesWithRev", int64(s.FilesWithRev), 2},     // fid1, fid2 (fid3 deleted)
 		{"TotalRevisions", int64(s.TotalRevisions), 3}, // 2 + 1
 		{"LiveBytes", s.LiveBytes, 300},
 		{"VersionFiles", int64(s.VersionFiles), 3},
@@ -70,8 +70,8 @@ func TestComputeRepoStats(t *testing.T) {
 		{"GraveyardFiles", int64(s.GraveyardFiles), 1},
 		{"GraveyardBytes", s.GraveyardBytes, 25},
 		{"DriveRevFiles", int64(s.DriveRevFiles), 2},
-		{"DriveRevBytes", s.DriveRevBytes, 25},      // 10 + 15
-		{"TotalDiskBytes", s.TotalDiskBytes, 530},   // 300 + 180 + 25 + 25
+		{"DriveRevBytes", s.DriveRevBytes, 25},    // 10 + 15
+		{"TotalDiskBytes", s.TotalDiskBytes, 530}, // 300 + 180 + 25 + 25
 	}
 	for _, c := range checks {
 		if c.got != c.want {

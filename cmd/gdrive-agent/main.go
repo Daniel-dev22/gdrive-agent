@@ -87,16 +87,16 @@ func main() {
 	limiter := drive.NewAdaptiveLimiter(cfg.MaxRPS, cfg.MaxConcurrent)
 	limiter.StartRamper(ctx)
 
-	// Pooled HTTP client for outbound calls back to the router. The URL host
-	// ("controller-api.{domain}") is preserved as the Host header so the
-	// local docker Traefik can match its routing rule; when TRAEFIK_DOCKER_DNS
-	// is set the dial target is rewritten to that container so we never have
-	// to depend on the host's DNS resolving the public hostname correctly.
+	// Pooled HTTP client for outbound calls back to the controller. The host
+	// from CONTROL_CENTER_URL is preserved as the Host header so the local
+	// reverse proxy can match its routing rule; when TRAEFIK_DOCKER_DNS is set
+	// the dial target is rewritten to that container so we never have to
+	// depend on the host's DNS resolving the public hostname correctly.
 	// Shared with duplicacy-agent-api via agent-kit-go/transport (canonical
 	// pool knobs were taken from gdrive: KeepAlive 30s, IdleConnTimeout 90s,
 	// ForceAttemptHTTP2, dial 5s, MaxIdleConns 20, per-host 10, client 30s).
-	// No bearer here — the plain router client; the event Outbox client below
-	// wraps this transport to add the bearer.
+	// No bearer here — the plain client; the event Outbox client below wraps
+	// this transport to add the bearer.
 	routerHTTP := transport.NewRouterClient(transport.RouterClientConfig{
 		TraefikDockerDNS: cfg.TraefikDockerDNS,
 		TraefikDialPort:  cfg.TraefikDialPort,
@@ -113,8 +113,8 @@ func main() {
 
 	// Durable outbound event queue (agent-kit-go). Job lifecycle events used
 	// to be pushed fire-and-forget from the EventEmitter, so a transient
-	// controller outage or an agent restart could leave a central
-	// gdrive_jobs row stuck "running". The Outbox persists each event to a
+	// controller outage or an agent restart could leave the controller's job
+	// row stuck "running". The Outbox persists each event to a
 	// pending_events table on the same SQLite handle, fires an immediate
 	// best-effort POST, and retries the backlog every 30s. It POSTs to the
 	// same /api/gdrive/jobs/:id/event endpoint with the same flat JSON body;
@@ -214,9 +214,10 @@ func main() {
 
 	app.RegisterRoutes(r)
 
-	// WS endpoints. Inbound auth is the mTLS tunnel terminated by the host
-	// Traefik (per-site client cert); no application-layer bearer is required
-	// on this direction.
+	// WS endpoints. Like every other route, these carry NO application-layer
+	// authentication — the agent assumes an mTLS-terminating reverse proxy in
+	// front of it. Both upgraders also accept any Origin. See the security
+	// section of README.md before exposing this listener directly.
 	r.GET("/ws/fleet", ws.FleetHandler(hub))
 	r.GET("/ws/jobs/:id/logs", ws.JobLogHandler(runner))
 
@@ -266,45 +267,54 @@ func loggerMiddleware() gin.HandlerFunc {
 }
 
 func printHelp() {
-	fmt.Println(`gdrive-agent — Control Center Google Drive backup agent
+	fmt.Println(`gdrive-agent — single-host Google Drive backup agent
 
 Usage: gdrive-agent [--help|--version]
 
+WARNING: no route is authenticated at the application layer. The agent
+expects an mTLS-terminating reverse proxy in front of it. See README.md.
+
 Required env vars:
-  GDRIVE_NODE_TOKEN              Bearer token the agent attaches on outbound calls to controller
-  LOCAL_TLS_DOMAIN               e.g. example.com
-  CONTROL_CENTER_URL             e.g. https://controller-api.example.com:1443
-  TRAEFIK_DOCKER_DNS             e.g. traefik (rewrite dial target to local docker Traefik; mirrors duplicacy)
-  TRAEFIK_DIAL_PORT              default 1443
-  SITE_ID                        kd | ng
-  NODE_NAME                      e.g. nas
+  GDRIVE_NODE_TOKEN              Bearer token attached to OUTBOUND calls to the controller
+                                 (or supply it via BEARER_TOKEN_FILE instead)
+  CONTROL_CENTER_URL             Controller base URL, e.g. https://controller.example.com:1443
+  SITE_ID                        Site label stamped on outbound events, e.g. site-a
+  NODE_NAME                      This host's name in the controller's /api/gdrive/:node/* route, e.g. nas
 
 Optional env vars:
+  BEARER_TOKEN_FILE              Path to a file holding the bearer token; takes precedence
+                                 over GDRIVE_NODE_TOKEN when set
+  TRAEFIK_DOCKER_DNS             e.g. traefik — rewrite the outbound dial target to this
+                                 container, keeping the Host header / SNI. Empty = direct dial
+  TRAEFIK_DIAL_PORT              default 1443 — port used with TRAEFIK_DOCKER_DNS
   GDRIVE_BACKUP_ROOT             default /mnt/backups/gdrive
   GDRIVE_MAX_RPS                 default 10
   GDRIVE_MAX_CONCURRENT          default 8
-  GDRIVE_RESTORE_ALLOWED_ROOTS   CSV; default = backup root
+  GDRIVE_RESTORE_ALLOWED_ROOTS   CSV of absolute prefixes a custom restore may write into;
+                                 default = backup root
   LISTEN_ADDR                    default :8080
   LOG_LEVEL                      debug|info|warn|error (default info)
 
 Endpoints:
+  GET    /health/live                                 Liveness (HEAD alias too)
+  GET    /health/ready                                Readiness — pings SQLite (HEAD alias too)
   POST   /repos/init                                  Bootstrap repo binding
-  POST   /repos/bind                                  Idempotent rebind
+  POST   /repos/bind                                  Idempotent rebind (same body as init)
   GET    /repos                                       List bound repos
-  GET    /repos/:id
-  DELETE /repos/:id
-  POST   /internal/credentials/:id/invalidate         Cache bust
-  POST   /schedules/refresh                           Schedule re-pull nudge
+  GET    /repos/:id                                   One repo
+  GET    /repos/:id/stats                             Cached mirror stats (204 if never backed up)
+  DELETE /repos/:id                                   Drop the binding (leaves data on disk)
+  POST   /internal/credentials/:id/invalidate         Drop the cached OAuth token source
+  POST   /schedules/refresh                           Pull schedules from the controller now
   POST   /backup                                      Start backup job
   POST   /restore                                     Start restore job
-  POST   /jobs/:id/cancel
-  GET    /jobs
-  GET    /jobs/:id
-  GET    /snapshots/:repo                             Version list
-  GET    /snapshots/:repo/:revision/files             File tree at revision
-  GET    /files/:repo/:version/*path                  Stream a file version
+  POST   /jobs/:id/cancel                             Cancel a running job
+  GET    /jobs                                        100 most recent jobs
+  GET    /jobs/:id                                    One job
+  GET    /snapshots/:repo/:revision/files             Mirrored file tree
+  GET    /revisions/:repo/:file_id                    Rotated version history for one file
+  GET    /files/:repo/:version/*path                  Stream a mirrored file (path = file id)
   GET    /drive/folders?q=&account_id=&parent=        Drive folder picker
   GET    /ws/fleet                                    Snapshot push WS
-  GET    /ws/jobs/:id/logs                            Live log tail WS
-  GET    /health/live  /health/ready                  Probes (no auth)`)
+  GET    /ws/jobs/:id/logs                            Live log tail WS`)
 }
