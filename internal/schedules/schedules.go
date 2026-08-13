@@ -1,19 +1,19 @@
 // Package schedules is the gdrive-side adapter for the shared per-agent
 // scheduler in github.com/Daniel-dev22/agent-kit-go/scheduler.
 //
-// The shared kit owns the cron tick, the reconcile pull from
+// The shared kit owns the cron tick, the reconcile pull from the
 // controller, the on-disk schedules.json cache (atomic write), and
 // missed-run recovery. This adapter supplies what is gdrive-specific:
 //
 //   - the FireFunc that maps a schedule's RepoID into a backup job via
 //     the existing job.Runner.StartBackup pipeline.
-//   - the constructor wiring the agent's pooled router HTTP client +
+//   - the constructor wiring the agent's pooled HTTP client +
 //     config.Config into a scheduler.Config.
 //
-// Per CLAUDE.md ("Agent Scheduling Lives In The Agent"), scheduler-api
-// and EDA rulebooks are NOT in the firing path. The agent owns its own
-// cron evaluation so a controller pod restart cannot miss a fire
-// window.
+// The controller is NOT in the firing path: it is only the source of the
+// schedule LIST. The agent evaluates cron locally against a disk-cached
+// copy, so neither a controller outage nor an agent restart can make this
+// host miss a fire window.
 package schedules
 
 import (
@@ -83,10 +83,10 @@ func makeGdriveFire(runner Runner) kitsched.FireFunc {
 			return nil
 
 		case "prune":
-			// Prune is allowed by the gdrive_schedules.action CHECK
-			// constraint but the job.Runner doesn't expose StartPrune yet.
-			// Log + skip so scheduled prune rows don't crash the loop;
-			// remove this branch once Runner.StartPrune lands.
+			// The controller's schedule schema accepts "prune", but
+			// job.Runner doesn't expose StartPrune yet. Log + skip so a
+			// scheduled prune row doesn't fail the whole tick; remove this
+			// branch once Runner.StartPrune lands.
 			slog.Warn("gdrive schedule fire: prune action not implemented in runner; skipping",
 				"schedule", sch.ID,
 				"name", sch.Name,

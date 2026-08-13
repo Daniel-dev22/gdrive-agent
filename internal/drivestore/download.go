@@ -12,9 +12,8 @@
 // .part surviving a mid-stream failure so the NEXT run can re-`Range` from
 // where it stopped (see the resumeAt logic below). Routing the copy core
 // through CopyToFileAtomic would silently break resume for large interrupted
-// downloads, so the transport-neutral core stays inlined here to preserve exact
-// production behavior. (See migration report: the StreamDownload refactor onto
-// CopyToFileAtomic was deferred on behavioral-parity grounds.)
+// downloads — the failure mode being a multi-GB file that restarts from byte 0
+// on every attempt — so the copy core stays inlined here.
 package drivestore
 
 import (

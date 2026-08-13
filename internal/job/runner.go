@@ -46,15 +46,15 @@ const (
 )
 
 // EventEmitter is the function the runner calls on every state transition.
-// In production wiring it posts to /api/gdrive/jobs/:id/event on the router
-// over the mTLS tunnel. Stubbed-out in tests.
+// In production wiring it enqueues onto the durable outbox, which POSTs to
+// /api/gdrive/jobs/:id/event on the controller. Stubbed out in tests.
 type EventEmitter func(ctx context.Context, jobID string, event string, payload map[string]any)
 
 // SecretsFetcher returns the per-account oauth+client bundle for the given
 // account_id. The runner calls it once at job start; if a job lives long
-// enough for the refresh_token to rotate, the agent's router-driven
-// cache-invalidate handler drops the cached drive.Service so the NEXT job
-// picks up the new bundle.
+// enough for the refresh_token to rotate, the /internal/credentials/:id/
+// invalidate handler drops the cached token source so the NEXT job picks
+// up the new bundle.
 type SecretsFetcher func(ctx context.Context, accountID string) (gdrive.SecretBundle, error)
 
 // Runner owns the job lifecycle. One Runner per agent process. Jobs run
@@ -154,8 +154,10 @@ func (r *Runner) StartBackup(ctx context.Context, req BackupRequest) (string, er
 	return jobID, nil
 }
 
-// runBackup executes the §F.6 backup algorithm. State transitions are
-// persisted to SQLite and broadcast via the event emitter and onChange.
+// runBackup executes one full backup pass: collect the Drive tree, download
+// what changed, rotate versions, bury what vanished, sweep the graveyard.
+// State transitions are persisted to SQLite and broadcast via the event
+// emitter and onChange.
 func (r *Runner) runBackup(ctx context.Context, h *JobHandle, repo db.RepoRow) {
 	r.markRunning(ctx, h)
 	defer r.cleanup(h.ID)
@@ -230,7 +232,7 @@ func (r *Runner) runBackup(ctx context.Context, h *JobHandle, repo db.RepoRow) {
 		}
 		liveAbs := filepath.Join(accountRoot, "files", storage.SanitizePath(path))
 
-		// 3-tier idempotency.
+		// Tiers 1+2 of the 3-tier change check (see canSkip).
 		prev, hadPrev := prevManifest[file.Id]
 		if hadPrev && r.canSkip(file, prev) {
 			// Already-current entry; re-stamp manifest in case other
@@ -453,8 +455,9 @@ func (r *Runner) refreshRepoStats(accountID, accountRoot string, manifest map[st
 		"total_disk_bytes", stats.TotalDiskBytes)
 }
 
-// canSkip applies the 3-tier check (plan §F.4.3). Tier 1+2 are pure
-// metadata; tier 3 (If-Modified-Since 304) is handled inside StreamDownload.
+// canSkip applies tiers 1 and 2 of the 3-tier change check — both pure
+// metadata, costing no bytes. Tier 3 (If-Modified-Since → 304) can only be
+// answered by the server and so is handled inside StreamDownload.
 func (r *Runner) canSkip(file *drive.File, prev storage.ManifestFile) bool {
 	if file.Md5Checksum != "" {
 		// Binary file — md5 + size is authoritative.

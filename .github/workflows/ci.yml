@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      # github.com/Daniel-dev22/agent-kit-go is a dependency of this module.
+      # While it is private, the module fetch needs a token with read access to
+      # it — set a GO_MODULE_TOKEN repo secret and the step below wires it up.
+      # Once agent-kit-go is public the secret can be dropped and the step
+      # no-ops. (secrets.* is not usable in a step-level `if`, so it is lifted
+      # into env here.)
+      GO_MODULE_TOKEN: ${{ secrets.GO_MODULE_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: true
+
+      - name: Configure private module access
+        if: env.GO_MODULE_TOKEN != ''
+        run: |
+          echo "GOPRIVATE=github.com/Daniel-dev22/*" >> "$GITHUB_ENV"
+          git config --global \
+            url."https://x-access-token:${GO_MODULE_TOKEN}@github.com/".insteadOf \
+            "https://github.com/"
+
+      - name: Vet
+        run: go vet ./...
+
+      # -count=1 defeats the test cache, so a green run always reflects this
+      # commit rather than replaying a cached "ok" from an earlier one.
+      - name: Test
+        run: go test -count=1 ./...

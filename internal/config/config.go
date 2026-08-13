@@ -11,40 +11,33 @@ import (
 
 // Config captures every operator-tunable parameter for the agent. All values
 // arrive via environment variables — no flag parsing, no config files. The
-// ansible role that deploys the agent renders these into the docker-compose
-// env block.
+// deployment automation renders these into the container's env block.
 type Config struct {
-	// NodeToken is the plaintext bearer the agent attaches to its outbound
-	// calls to the controller router. The router stores the SHA-256 of
-	// this in the gdrive_node_tokens table and verifies inbound agent calls
-	// against it. Mirrors duplicacy-agent-api: inbound auth on the agent is
-	// the mTLS tunnel, so this token is used only in the agent→router direction.
+	// NodeToken is the plaintext bearer the agent attaches to its OUTBOUND
+	// calls to the controller. The controller stores the SHA-256 of this and
+	// verifies agent calls against it. Note the direction: inbound auth on the
+	// agent is the mTLS-terminating proxy in front of it, so this token is
+	// never checked on requests the agent receives.
 	NodeToken string
 
-	// LocalTLSDomain feeds the agent's redirect-URI computation and the host
-	// header that local Traefik expects to see. e.g. "example.com".
-	LocalTLSDomain string
-
-	// ControlCenterURL is the absolute URL the agent posts job events and
-	// pulls secret bundles from. Always the public cross-site hostname so the
-	// local Traefik can match Host(`controller-api.{domain}`) and forward
-	// into the cluster — e.g. "https://controller-api.example.com:1443".
-	// Mirrors duplicacy-agent-api's CONTROL_CENTER_URL.
+	// ControlCenterURL is the absolute base URL the agent posts job events to
+	// and pulls secret bundles from — e.g.
+	// "https://controller.example.com:1443". Its host stays as the HTTP Host
+	// header / TLS SNI on every outbound call even when TraefikDockerDNS
+	// rewrites the dial target, so a fronting proxy can route on it.
 	ControlCenterURL string
 
 	// TraefikDockerDNS is the docker-network DNS name to dial INSTEAD of the
 	// hostname in ControlCenterURL. When set (typically "traefik"), the HTTP
 	// client rewrites every dial target to <TraefikDockerDNS>:<TraefikDialPort>
-	// while keeping the URL's authority as the Host header / TLS SNI. This
-	// lets the local docker Traefik match `controller-api.{domain}` and
-	// forward into the cluster over its site-specific mTLS ServersTransport.
-	// Empty disables rewrite (direct dial; for k3s-node hosts that reach the
-	// cluster via CNI cluster DNS — not applicable to gdrive which is NAS-only
-	// but kept for parity with duplicacy-agent-api).
+	// while keeping the URL's authority as the Host header / TLS SNI. That
+	// lets the host's local reverse proxy match the controller hostname and
+	// forward it on over its own client-certificate transport, so the agent
+	// never depends on the host resolving the public hostname itself. Empty
+	// disables the rewrite (direct dial).
 	TraefikDockerDNS string
 
-	// TraefikDialPort is the port on the resolved Traefik IP. Default "1443"
-	// — the websecure-internal entrypoint.
+	// TraefikDialPort is the port on the resolved Traefik IP. Default "1443".
 	TraefikDialPort string
 
 	// BackupRoot is the on-disk root for every backed-up account's mirror.
@@ -52,13 +45,13 @@ type Config struct {
 	// docker-compose unit must point here.
 	BackupRoot string
 
-	// SiteID identifies which Control Center site this agent serves. One of
-	// "kd" | "ng". Stamped onto job-event posts so the router doesn't have
-	// to infer it from the incoming hostname.
+	// SiteID identifies which site this agent serves — an opaque short label
+	// (e.g. site-a). Stamped onto job-event posts so the controller doesn't
+	// have to infer it from the incoming hostname.
 	SiteID string
 
-	// NodeName is the short name the router uses to address this agent in
-	// the /api/gdrive/:node/* route. Typically "nas".
+	// NodeName is the short name the controller uses to address this agent in
+	// its /api/gdrive/:node/* route. Typically the host's role, e.g. "nas".
 	NodeName string
 
 	// MaxRPS is the steady-state ceiling for Drive API requests/sec across
@@ -92,7 +85,6 @@ func Load() (Config, error) {
 
 	cfg := Config{
 		NodeToken:        nodeToken,
-		LocalTLSDomain:   strings.TrimSpace(os.Getenv("LOCAL_TLS_DOMAIN")),
 		ControlCenterURL: strings.TrimRight(strings.TrimSpace(os.Getenv("CONTROL_CENTER_URL")), "/"),
 		TraefikDockerDNS: strings.TrimSpace(os.Getenv("TRAEFIK_DOCKER_DNS")),
 		TraefikDialPort:  getEnv("TRAEFIK_DIAL_PORT", "1443"),
@@ -140,9 +132,6 @@ func (c Config) validate() error {
 	if c.NodeToken == "" {
 		missing = append(missing, "GDRIVE_NODE_TOKEN")
 	}
-	if c.LocalTLSDomain == "" {
-		missing = append(missing, "LOCAL_TLS_DOMAIN")
-	}
 	if c.ControlCenterURL == "" {
 		missing = append(missing, "CONTROL_CENTER_URL")
 	}
@@ -182,9 +171,8 @@ func getFloat(k string, def float64) float64 {
 
 // loadNodeToken reads the bearer token from BEARER_TOKEN_FILE if set,
 // otherwise from GDRIVE_NODE_TOKEN env. The file path is the production
-// shape (mode 0600 bind-mount provisioned by the ansible role); env-var
-// fallback exists for local dev/test and to mirror duplicacy-agent-api's
-// dual-source pattern.
+// shape (a mode-0600 bind-mount written by the deployment automation); the
+// env-var form exists for local dev/test.
 func loadNodeToken() (string, error) {
 	if path := strings.TrimSpace(os.Getenv("BEARER_TOKEN_FILE")); path != "" {
 		raw, err := os.ReadFile(path)
