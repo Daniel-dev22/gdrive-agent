@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -16,6 +17,7 @@ import (
 	"github.com/Daniel-dev22/agent-kit-go/eventoutbox"
 	"github.com/Daniel-dev22/agent-kit-go/jobstore"
 	"github.com/Daniel-dev22/agent-kit-go/logging"
+	"github.com/Daniel-dev22/agent-kit-go/memlimit"
 	"github.com/Daniel-dev22/agent-kit-go/reconcile"
 	"github.com/Daniel-dev22/agent-kit-go/transport"
 	"github.com/gin-gonic/gin"
@@ -59,6 +61,9 @@ func main() {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	// Before the database opens or any server starts; the refresher stops with ctx.
+	anon := setupMemLimit(ctx)
 
 	// SQLite store under <backup_root>/.agent/state.db so the agent's
 	// operational state lives alongside the data it describes — no extra
@@ -107,6 +112,7 @@ func main() {
 		Store:        store,
 		Factory:      factory,
 		RouterClient: routerHTTP,
+		Anon:         anon,
 	}
 	app.SecretsFetcher = router.DefaultSecretsFetcher(cfg, routerHTTP)
 	app.BrowseSecretsFetcher = router.DefaultBrowseSecretsFetcher(cfg, routerHTTP)
@@ -252,6 +258,23 @@ func main() {
 
 func setupLogging() {
 	logging.Setup(os.Getenv("LOG_LEVEL"))
+}
+
+// setupMemLimit derives the Go soft memory limit from the container cgroup
+// limit (85%) so the GC tightens before the kernel OOM-killer acts, and starts
+// the cgroup anon-memory sampler exposed on /health/ready. It runs before any
+// server or worker starts. An invalid configuration is fatal (the agent would
+// otherwise run uncapped by the Go runtime under a hard cgroup cap); an
+// environmental failure is logged and retried by the refresher.
+func setupMemLimit(ctx context.Context) *memlimit.PeakAnon {
+	if _, err := memlimit.Apply(ctx, slog.Default()); err != nil {
+		if errors.Is(err, memlimit.ErrInvalidConfig) {
+			slog.Error("memlimit: invalid configuration", "error", err)
+			os.Exit(1)
+		}
+		slog.Warn("memlimit: not applied", "error", err)
+	}
+	return memlimit.StartPeakAnon(ctx, slog.Default(), memlimit.PeakOptions{})
 }
 
 func loggerMiddleware() gin.HandlerFunc {
