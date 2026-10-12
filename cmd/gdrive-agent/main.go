@@ -16,6 +16,7 @@ import (
 	"github.com/Daniel-dev22/agent-kit-go/eventoutbox"
 	"github.com/Daniel-dev22/agent-kit-go/jobstore"
 	"github.com/Daniel-dev22/agent-kit-go/logging"
+	"github.com/Daniel-dev22/agent-kit-go/memlimit"
 	"github.com/Daniel-dev22/agent-kit-go/reconcile"
 	"github.com/Daniel-dev22/agent-kit-go/transport"
 	"github.com/gin-gonic/gin"
@@ -48,6 +49,7 @@ func main() {
 	}
 
 	setupLogging()
+	setupMemLimit()
 
 	cfg := config.MustLoad()
 	slog.Info("gdrive-agent starting",
@@ -252,6 +254,15 @@ func main() {
 
 func setupLogging() {
 	logging.Setup(os.Getenv("LOG_LEVEL"))
+}
+
+// setupMemLimit derives the Go soft memory limit from the container cgroup
+// limit (85%) so the GC tightens before the kernel OOM-killer acts. It runs
+// before any server or worker starts; a failure is logged, never fatal.
+func setupMemLimit() {
+	if _, err := memlimit.Apply(slog.Default()); err != nil {
+		slog.Warn("memlimit: not applied", "error", err)
+	}
 }
 
 func loggerMiddleware() gin.HandlerFunc {
