@@ -49,7 +49,6 @@ func main() {
 	}
 
 	setupLogging()
-	setupMemLimit()
 
 	cfg := config.MustLoad()
 	slog.Info("gdrive-agent starting",
@@ -61,6 +60,9 @@ func main() {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	// Before the database opens or any server starts; the refresher stops with ctx.
+	setupMemLimit(ctx)
 
 	// SQLite store under <backup_root>/.agent/state.db so the agent's
 	// operational state lives alongside the data it describes — no extra
@@ -259,8 +261,8 @@ func setupLogging() {
 // setupMemLimit derives the Go soft memory limit from the container cgroup
 // limit (85%) so the GC tightens before the kernel OOM-killer acts. It runs
 // before any server or worker starts; a failure is logged, never fatal.
-func setupMemLimit() {
-	if _, err := memlimit.Apply(slog.Default()); err != nil {
+func setupMemLimit(ctx context.Context) {
+	if _, err := memlimit.Apply(ctx, slog.Default()); err != nil {
 		slog.Warn("memlimit: not applied", "error", err)
 	}
 }
