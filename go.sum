@@ -10,6 +10,8 @@ github.com/Daniel-dev22/agent-kit-go v0.3.1-0.20261012132739-b39cddf067d5 h1:B4w
 github.com/Daniel-dev22/agent-kit-go v0.3.1-0.20261012132739-b39cddf067d5/go.mod h1:rj74Jl5zMqJ6qcttRfBki9G4BymNQNtu/qPshXp0T7A=
 github.com/Daniel-dev22/agent-kit-go v0.3.1-0.20261012134307-2c5f76514d56 h1:7IQrtirQHuNmqwjCsy0rkq0OgZRDQgDfWPN5ec7dBi4=
 github.com/Daniel-dev22/agent-kit-go v0.3.1-0.20261012134307-2c5f76514d56/go.mod h1:rj74Jl5zMqJ6qcttRfBki9G4BymNQNtu/qPshXp0T7A=
+github.com/Daniel-dev22/agent-kit-go v0.3.1-0.20261012140424-bc2e072a00cb h1:4iLc+ThgjlqHife/s/FnAQGNbk4Lv4TYJfoXpWSUFZ0=
+github.com/Daniel-dev22/agent-kit-go v0.3.1-0.20261012140424-bc2e072a00cb/go.mod h1:rj74Jl5zMqJ6qcttRfBki9G4BymNQNtu/qPshXp0T7A=
 github.com/bytedance/sonic v1.11.6 h1:oUp34TzMlL+OY1OUWxHqsdkgC/Zfc85zGqw9siXjrc0=
 github.com/bytedance/sonic v1.11.6/go.mod h1:LysEHSvpvDySVdC2f87zGWf6CIKJcAvqab1ZaiQtds4=
 github.com/bytedance/sonic/loader v0.1.1 h1:c+e5Pt1k/cy5wMveRDyk2X4B9hF4g7an8N3zCYjJFNM=
