@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/Daniel-dev22/agent-kit-go/memlimit"
 	"io"
 	"log/slog"
 	"net/http"
@@ -37,6 +38,10 @@ type App struct {
 	Factory *drive.ClientFactory
 	Runner  *job.Runner
 	Fleet   *fleet.Hub
+
+	// Anon, when set, adds the cgroup's anonymous-memory current/peak to
+	// /health/ready. The peak is the number to size the container memory cap from.
+	Anon *memlimit.PeakAnon
 
 	// Scheduler is the per-host cron scheduler from agent-kit-go. Pulled
 	// from <CONTROL_CENTER_URL>/api/gdrive/schedules?node=<self>, cached
@@ -136,7 +141,13 @@ func (a *App) handleReady(c *gin.Context) {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"status": "not_ready", "error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"status": "ready"})
+	body := gin.H{"status": "ready"}
+	if a.Anon != nil {
+		st := a.Anon.Stats()
+		body["anon_bytes"] = st.CurrentBytes
+		body["anon_peak_bytes"] = st.MaxBytes
+	}
+	c.JSON(http.StatusOK, body)
 }
 
 // ----- repos -----

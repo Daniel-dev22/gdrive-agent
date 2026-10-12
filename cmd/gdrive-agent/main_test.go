@@ -49,6 +49,12 @@ func unconditionalCall(stmt ast.Stmt, name string) (token.Pos, bool) {
 		if c, ok := s.X.(*ast.CallExpr); ok && callName(c) == name {
 			return c.Pos(), true
 		}
+	case *ast.AssignStmt: // x := call(...)
+		if len(s.Rhs) == 1 {
+			if c, ok := s.Rhs[0].(*ast.CallExpr); ok && callName(c) == name {
+				return c.Pos(), true
+			}
+		}
 	case *ast.IfStmt:
 		if as, ok := s.Init.(*ast.AssignStmt); ok && len(as.Rhs) == 1 {
 			if c, ok := as.Rhs[0].(*ast.CallExpr); ok && callName(c) == name {
@@ -120,7 +126,7 @@ func TestMemLimitWiredBeforeServers(t *testing.T) {
 // still compiling.
 func TestMemLimitWiringCheckerRejectsBrokenShapes(t *testing.T) {
 	const tail = `
-func setupMemLimit(ctx context.Context) { if _, err := memlimit.Apply(ctx, nil); err != nil {} }
+func setupMemLimit(ctx context.Context) *memlimit.PeakAnon { if _, err := memlimit.Apply(ctx, nil); err != nil {}; return nil }
 `
 	cases := map[string]string{
 		"dead branch in main": `package main
@@ -148,7 +154,7 @@ func setupMemLimit(ctx context.Context) {}`,
 		})
 	}
 	good := `package main
-func main() { setupMemLimit(ctx); db.Open(); srv.ListenAndServe() }` + tail
+func main() { anon := setupMemLimit(ctx); db.Open(); srv.ListenAndServe() }` + tail
 	if msg := checkWiring(parseMain(t, good)); msg != "" {
 		t.Fatalf("checker rejected good wiring: %s", msg)
 	}

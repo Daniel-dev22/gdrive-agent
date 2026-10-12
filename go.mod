@@ -3,7 +3,7 @@ module github.com/Daniel-dev22/gdrive-agent
 go 1.26
 
 require (
-	github.com/Daniel-dev22/agent-kit-go v0.3.1-0.20261012140424-bc2e072a00cb
+	github.com/Daniel-dev22/agent-kit-go v0.3.1-0.20261012142600-ff46aeec18b1
 	github.com/gin-gonic/gin v1.10.0
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3

@@ -56,6 +56,10 @@ RUN CGO_ENABLED=0 GOOS=linux \
 FROM alpine:3.21
 RUN apk add --no-cache ca-certificates wget
 COPY --from=build /out/gdrive-agent /gdrive-agent
+# Capability marker: this image derives its Go memory limit from the cgroup (agent-kit-go
+# memlimit), so a hard container memory cap is safe to apply. Deploy tooling refuses to render
+# a cap for an image without it.
+LABEL agent.memlimit="1"
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
   CMD wget -q --spider http://localhost:8080/health/ready || exit 1
