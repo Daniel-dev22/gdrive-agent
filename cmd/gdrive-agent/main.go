@@ -102,10 +102,7 @@ func main() {
 	// ForceAttemptHTTP2, dial 5s, MaxIdleConns 20, per-host 10, client 30s).
 	// No bearer here — the plain client; the event Outbox client below wraps
 	// this transport to add the bearer.
-	routerHTTP := transport.NewRouterClient(transport.RouterClientConfig{
-		TraefikDockerDNS: cfg.TraefikDockerDNS,
-		TraefikDialPort:  cfg.TraefikDialPort,
-	})
+	routerHTTP := newRouterHTTP(cfg)
 
 	app := &router.App{
 		Cfg:          cfg,
@@ -254,6 +251,17 @@ func main() {
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		slog.Error("HTTP shutdown error", "error", err)
 	}
+}
+
+// newRouterHTTP builds the plain (tokenless) controller client handed to the
+// secrets fetchers, which attach their own Authorization header. The kit client
+// refuses any redirect off the controller's origin, so a redirected vend can
+// never be accepted as the controller's answer.
+func newRouterHTTP(cfg config.Config) *http.Client {
+	return transport.NewRouterClient(transport.RouterClientConfig{
+		TraefikDockerDNS: cfg.TraefikDockerDNS,
+		TraefikDialPort:  cfg.TraefikDialPort,
+	})
 }
 
 func setupLogging() {
